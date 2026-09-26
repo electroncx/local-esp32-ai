@@ -147,9 +147,11 @@ void tai_number_words(const char *in, char *out, int out_len) {
             continue;
         }
         // A run of number words -> one number: "one hundred and five", "a thousand".
+        // "and" only joins after hundred/thousand/...: "one and ten" stays two numbers.
         long long total = 0, cur = 0, w;
-        int j = i, any = 0;
+        int j = i, any = 0, big = 0;
         for (; j < n; j++) {
+            if (cur > 1000000000LL || total > 1000000000000000LL) break;  // no overflow
             int k = word_or_hyphenated(tok[j], &w);
             if (!k && j == i && (eq(tok[j], "a") || eq(tok[j], "an")) && j + 1 < n &&
                 word_value(tok[j + 1], &w) == 2) {
@@ -157,9 +159,9 @@ void tai_number_words(const char *in, char *out, int out_len) {
                 continue;
             }
             if (k == 1) cur += w;
-            else if (k == 2 && w == 100) cur = (cur ? cur : 1) * 100;
-            else if (k == 2) total += (cur ? cur : 1) * w, cur = 0;
-            else if (any && eq(tok[j], "and") && j + 1 < n && word_or_hyphenated(tok[j + 1], &w)) continue;
+            else if (k == 2 && w == 100) cur = (cur ? cur : 1) * 100, big = 1;
+            else if (k == 2) total += (cur ? cur : 1) * w, cur = 0, big = 1;
+            else if (big && eq(tok[j], "and") && j + 1 < n && word_or_hyphenated(tok[j + 1], &w)) continue;
             else break;
             any = 1;
         }
@@ -350,7 +352,7 @@ static int parse_time(char **tok, int n, int i, int *mins, int *ampm, int allow_
     if (eq(tok[i], "midnight")) return (*mins = 0), (*ampm = 1), 1;
     const char *t = tok[i];
     int h = 0, m = 0, digits = 0, used = 1;
-    while (*t >= '0' && *t <= '9') h = h * 10 + (*t++ - '0'), digits++;
+    while (*t >= '0' && *t <= '9' && digits < 5) h = h * 10 + (*t++ - '0'), digits++;
     if (!digits || digits > 2) {
         if (digits == 4 && !*t && allow_hhmm) {  // "1530"
             m = h % 100;
@@ -499,7 +501,7 @@ static int day_number(const char *t, int *d) {
 static int year_number(const char *t, long *y) {
     char *end;
     long v = strtol(t, &end, 10);
-    if (end == t || *end) return 0;
+    if (end == t || *end || v < -9999 || v > 9999) return 0;
     *y = v;
     return 1;
 }
@@ -509,7 +511,8 @@ static int year_number(const char *t, long *y) {
 static int parse_date(char **tok, int n, int i, long *y, int *mo, int *d) {
     int yy, mm, dd;
     *y = 0;
-    if (i < n && sscanf(tok[i], "%4d-%2d-%2d", &yy, &mm, &dd) == 3) {
+    // ISO only: the year has 4 digits ("12-25-2024" is not year 12).
+    if (i < n && strspn(tok[i], "0123456789") == 4 && sscanf(tok[i], "%4d-%2d-%2d", &yy, &mm, &dd) == 3) {
         *y = yy, *mo = mm, *d = dd;
         return 1;
     }
@@ -592,6 +595,7 @@ static int dates_question(char **tok, int n, char *out, int out_len) {
         long z = days_from_civil(yy, mo, d) + sign * days, ry;
         int rm, rd;
         civil_from_days(z, &ry, &rm, &rd);
+        if (ry < 1 || ry > 9999) return 0;  // no year 0 or 10000 on any calendar people use
         snprintf(out, (size_t)out_len, "%s, %s %d, %ld.", WEEKDAYS[((z % 7) + 11) % 7], MONTH_NAMES[rm - 1], rd, ry);
         return 1;
     }
@@ -684,7 +688,7 @@ static int bmi_question(char **tok, int n, char *out, int out_len) {
     for (int i = 0; i < n; i++) {
         const char *u = i + 1 < n ? tok[i + 1] : "";
         int f, in;
-        if (sscanf(tok[i], "%d'%d", &f, &in) == 2 && f > 0) {  // 5'9
+        if (strlen(tok[i]) <= 5 && sscanf(tok[i], "%d'%d", &f, &in) == 2 && f > 0 && f < 10 && in >= 0 && in < 12) {  // 5'9
             m = (f * 12 + in) * 0.0254;
             continue;
         }
@@ -807,7 +811,7 @@ static int chance_question(char **tok, int n, char *out, int out_len) {
     if (n >= 2 && eq(tok[0], "roll")) {
         int count = 1, sides = 6;
         const char *d = tok[n - 1];
-        if (d[0] == 'd' && d[1] >= '1' && d[1] <= '9') sides = atoi(d + 1);
+        if (d[0] == 'd' && d[1] >= '1' && d[1] <= '9') sides = strspn(d + 1, "0123456789") > 4 ? 0 : atoi(d + 1);
         else if (!(eq(d, "die") || eq(d, "dice"))) return 0;
         if (n >= 3 && num(tok[1], &a) && a >= 1 && a <= 6 && a == floor(a)) count = (int)a;
         if (sides < 2 || sides > 1000) return 0;
@@ -815,8 +819,9 @@ static int chance_question(char **tok, int n, char *out, int out_len) {
         for (int k = 0; k < count; k++) {
             int r = 1 + (int)rnd((uint32_t)sides);
             total += r;
-            o += snprintf(out + o, (size_t)(out_len - o), "%s%d", k ? (k == count - 1 ? " and " : ", ") : "", r);
+            if (o < out_len) o += snprintf(out + o, (size_t)(out_len - o), "%s%d", k ? (k == count - 1 ? " and " : ", ") : "", r);
         }
+        if (o >= out_len) return 1;  // truncated, still terminated
         if (count > 1) snprintf(out + o, (size_t)(out_len - o), " (%d).", total);
         else snprintf(out + o, (size_t)(out_len - o), ".");
         return 1;

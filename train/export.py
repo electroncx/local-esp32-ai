@@ -5,6 +5,8 @@
 Writes:
     firmware/data/model.bin        the model; the host build loads it and the firmware
                                    embeds it in flash (firmware/embed_model.py)
+    firmware/data/model.tier       its fact set (small, max4mb, large)
+    firmware/data/model.dropped    keys of facts it refuses for lack of room (--max-bytes)
 
 File layout, version 4 (int4 weights), 5 (ternary) or 6 (int2), little endian,
 every block padded to 4 bytes:
@@ -29,8 +31,10 @@ every block padded to 4 bytes:
                   n_extra, u16 offsets and a u32-sized blob of extra words, then
                   u32 bytes of codes (see encode_keys)
     errata        u32 count, u16 fact indices (sorted), then their answers as
-                  strings: facts the int4 model answers wrong, found by
-                  running the C engine (host/tinyai) on every fact's key
+                  strings: facts the quantized model answers wrong, found by
+                  running the C engine (host/tinyai) on every fact's key. With
+                  --max-bytes, the ones that don't fit get an empty answer: the
+                  engine refuses them, and their key is stored empty
 """
 
 import argparse
@@ -157,6 +161,42 @@ def decode_keys(c, wid, extras):
     return keys
 
 
+def pack_keys(keys, wid):
+    """The keys block: extra words (offsets + strings), then the coded keys."""
+    extras, codes = encode_keys(keys, wid)
+    assert decode_keys(codes, wid, extras) == keys
+    ext = "\0".join(extras).encode("ascii") + b"\0"
+    offs, o = [], 0
+    for e in extras:
+        offs.append(o)
+        o += len(e) + 1
+    assert o < 65536
+    return (struct.pack("<I", len(extras)) + pad4(struct.pack(f"<{len(extras)}H", *offs)) +
+            struct.pack("<I", len(ext)) + pad4(ext) + struct.pack("<I", len(codes)) + pad4(codes))
+
+
+def fit(wrong, strict, assemble, max_bytes):
+    """Errata for the facts the model gets wrong: [(fact, answer)], sorted.
+    Without a size limit every answer is stored. With one, answers are stored
+    in priority order (hand-written and survival facts first and always, then
+    Wikidata facts, best known first) and the rest get "" (refused)."""
+    if not max_bytes or len(assemble(wrong)) <= max_bytes:
+        return wrong
+    order = [w for w in wrong if w[0] not in strict] + [w for w in wrong if w[0] in strict]
+
+    def plan(k):  # store the first k answers of `order`, refuse the rest
+        return sorted(order[:k] + [(i, "") for i, _ in order[k:]])
+
+    must = sum(i not in strict for i, _ in wrong)
+    if len(assemble(plan(must))) > max_bytes:
+        sys.exit(f"hand-written facts alone need {len(assemble(plan(must))):,} bytes, over {max_bytes:,}")
+    lo, hi = must, len(order)  # plan(lo) fits, plan(hi) doesn't
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        lo, hi = (mid, hi) if len(assemble(plan(mid))) <= max_bytes else (lo, mid)
+    return plan(lo)
+
+
 def errata(fixes):
     """[(fact index, answer)] -> the errata block (see the layout above)."""
     return (struct.pack("<I", len(fixes)) + pad4(struct.pack(f"<{len(fixes)}H", *(i for i, _ in fixes))) +
@@ -166,9 +206,14 @@ def errata(fixes):
 ask = engine.ask  # the C engine, on all CPU cores
 
 
-def write(args, data):
+def write(args, data, dropped):
     with open(args.bin, "wb") as f:
         f.write(data)
+    stem = os.path.splitext(args.bin)[0]
+    with open(stem + ".tier", "w") as f:
+        f.write(args.tier + "\n")  # which fact set this model knows (read by the tests)
+    with open(stem + ".dropped", "w") as f:  # facts refused for lack of room (read by the tests)
+        f.write("".join(k + "\n" for k in dropped))
     if not args.header:
         return
     with open(args.header, "w") as f:
@@ -182,17 +227,24 @@ def write(args, data):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tier", default="small", choices=["small", "max4mb", "large"],
-                    help="fact set: small (2M int4), max4mb (8.7M ternary) or large (16 MB boards)")
+    ap.add_argument("--tier", default=None, choices=["small", "max4mb", "large"],
+                    help="fact set the checkpoint was trained on (default: recorded in it by train.py)")
     ap.add_argument("--ckpt", default="train/ckpt.pt")
     ap.add_argument("--bin", default="firmware/data/model.bin")
     ap.add_argument("--header", default=None, help="also write the model as a C array (optional; the firmware embeds the .bin)")
     ap.add_argument("--host", default="host/tinyai", help="C engine used to find errata")
     ap.add_argument("--no-check", action="store_true", help="skip the errata check")
+    ap.add_argument("--max-bytes", type=int, default=None,
+                    help="size limit: facts the model gets wrong that don't fit as errata are refused")
     args = ap.parse_args()
 
     ck = torch.load(args.ckpt, map_location="cpu")
     c, sd = ck["cfg"], ck["model"]
+    if args.tier and ck.get("tier") and args.tier != ck["tier"]:
+        sys.exit(f"{args.ckpt} was trained on tier {ck['tier']!r}, not {args.tier!r}")
+    args.tier = args.tier or ck.get("tier")
+    if not args.tier:
+        sys.exit(f"{args.ckpt} does not record its tier (older train.py): pass --tier")
     strict, lenient = set(), set()
     facts = load_facts(args.tier, strict=strict, lenient=lenient)
     keys = [canonical(qs) for qs, _ in facts]
@@ -216,37 +268,44 @@ def main():
     out.append(f32(sd["norm.w"]))
     index, wid = gate_index.build(list(known.items()), len(facts), strict, lenient)
     out.append(index)
-    extras, codes = encode_keys(keys, wid)
-    assert decode_keys(codes, wid, extras) == keys
-    ext = "\0".join(extras).encode("ascii") + b"\0"
-    offs, o = [], 0
-    for e in extras:
-        offs.append(o)
-        o += len(e) + 1
-    assert o < 65536
-    out += [struct.pack("<I", len(extras)), pad4(struct.pack(f"<{len(extras)}H", *offs)),
-            struct.pack("<I", len(ext)), pad4(ext), struct.pack("<I", len(codes)), pad4(codes)]
     n_words = len(wid)
     base = b"".join(out)
 
-    data = base + errata([])
-    write(args, data)
+    def assemble(fixes):
+        """The whole file. A fact with an empty erratum is refused, so its key
+        (only ever the model's prompt) is stored empty."""
+        drop = {i for i, a in fixes if not a}
+        return base + pack_keys([("" if i in drop else k) for i, k in enumerate(keys)], wid) + errata(fixes)
+
+    data = assemble([])
+    write(args, data, [])
     fixes = []
     if not args.no_check:
         if not os.path.exists(args.host):
             sys.exit(f"{args.host} not found: build it with `make -C host`, or pass --no-check")
+        # Errata are looked up by the fact the gate picks, so every key must
+        # reach its own fact (check_routing.py checks all other phrasings).
+        routes = ask(args.host, args.bin, keys, "--gate")
+        astray = [(k, r) for k, r, (_, a) in zip(keys, routes, facts) if r != k and r != "=" + a]
+        assert not astray, f"keys that don't reach their own fact: {astray[:5]}"
         # the real C engine answers every fact's key, exactly as on the device
         got = ask(args.host, args.bin, keys)
-        fixes = [(i, a) for i, ((_, a), g) in enumerate(zip(facts, got)) if g != a]
+        wrong = [(i, a) for i, ((_, a), g) in enumerate(zip(facts, got)) if g != a]
+        fixes = fit(wrong, strict, assemble, args.max_bytes)
         if fixes:
-            data = base + errata(fixes)
-            write(args, data)
-            still = [i for (i, a), g in zip(fixes, ask(args.host, args.bin, [keys[i] for i, _ in fixes])) if g != a]
+            data = assemble(fixes)
+            write(args, data, [keys[i] for i, a in fixes if not a])
+            # a stored answer is now exact; a dropped fact is refused, never wrong
+            still = [i for (i, a), g in zip(fixes, ask(args.host, args.bin, [keys[i] for i, _ in fixes]))
+                     if g != (a or "I don't know.")]
             assert not still, f"errata did not take: {[keys[i] for i in still[:5]]}"
-        print(f"C engine: {len(facts) - len(fixes)}/{len(facts)} facts exact from the model; "
-              f"{len(fixes)} stored as errata")
+        dropped = sum(not a for _, a in fixes)
+        print(f"C engine: {len(facts) - len(wrong)}/{len(facts)} facts exact from the model; "
+              f"{len(wrong) - dropped} stored as errata, {dropped} refused (no room)")
         for i, a in fixes[:20]:
-            print(f"    {keys[i]!r} -> {got[i]!r}, stored {a!r}")
+            print(f"    {keys[i]!r} -> {got[i]!r}, {'stored ' + repr(a) if a else 'refused'}")
+    if args.max_bytes and len(data) > args.max_bytes:
+        sys.exit(f"{len(data):,} bytes, over --max-bytes {args.max_bytes:,}")
     n_params = sum(v.numel() for v in sd.values())
     print(f"{n_params:,} params -> {len(data):,} bytes ({8 * len(data) / n_params:.2f} bits/param "
           f"incl. text), {len(facts)} facts, {len(known)} phrasings, {n_words} indexed words, "

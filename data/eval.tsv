@@ -1,4 +1,5 @@
-# Held-out questions: NOT in facts.tsv. Tests paraphrase handling and refusal.
+# Test questions: mostly rephrasings no fact file lists (train/evaluate.py scores
+# any that a fact file does list separately), plus refusals and arithmetic.
 # question<TAB>expected answer ("I don't know." = must refuse)
 how much does a humming bird weigh	Between 2 and 20 grams.
 hummingbird weight	Between 2 and 20 grams.
@@ -133,7 +134,7 @@ whats the safe temp for chicken	165 F (74 C).
 how hot does chicken need to be	165 F (74 C).
 at what temperature is chicken cooked	165 F (74 C).
 ground beef safe temperature	160 F (71 C).
-how hot should pork be	145 F (63 C), then rest 3 minutes.
+how hot should pork be	Whole cuts 145 F (63 C); ground 160 F.
 what temp should my refrigerator be at	40 F (4 C) or below.
 how cold should a freezer be	0 F (-18 C).
 how long can leftovers stay in the fridge	3 to 4 days.
@@ -155,7 +156,7 @@ what's the emergency number in australia	000.
 japan emergency number?	110 police; 119 fire and ambulance.
 poison control	1-800-222-1222 in the US.
 how do i treat a burn	Cool it under running water for 20 minutes.
-what should i do if someone is choking	5 back blows, then 5 abdominal thrusts.
+what should i do if someone is choking	Age 1+: 5 back blows, then 5 abdominal thrusts.
 how many compressions for cpr	30 chest compressions, then 2 breaths.
 how to stop a nose bleed	Lean forward and pinch the soft nose 10 minutes.
 what's a normal blood pressure	Below 120/80 mmHg.
@@ -236,7 +237,7 @@ what's the emergency number in india	112.
 number for emergencies in germany	112; 110 for police.
 what is the number for poison control	1-800-222-1222 in the US.
 suicide hotline	988 in the US: call or text.
-how do you help a choking person	5 back blows, then 5 abdominal thrusts.
+how do you help a choking person	Age 1+: 5 back blows, then 5 abdominal thrusts.
 first aid for burns	Cool it under running water for 20 minutes.
 what's the cpr compression rate	100 to 120 per minute.
 what to do for a bee sting	Scrape out the stinger, then apply a cold pack.
@@ -354,7 +355,7 @@ is it ok to drink ocean water if im stranded	No. It dehydrates you faster.
 can i eat snow if im thirsty	Melt it first; eating it chills you.
 where do i look for water	Go downhill; follow green plants, game trails.
 is it smart to ration water when stranded	No. Drink what you need; ration sweat instead.
-how long should i boil water at high elevation	3 minutes above 6,500 ft (2,000 m).
+how long should i boil water at high elevation	3 minutes above 5,000 ft (1,500 m).
 whats a solar still	Plastic over a pit; water condenses into a cup.
 signs im dehydrated	Thirst, dark urine, headache, dizziness.
 is it safe to drink from a lake	Not untreated. Boil, filter or disinfect it.
@@ -366,21 +367,21 @@ how should i put out my campfire	Drown it, stir it, feel that it's cold.
 how do i keep warm at night in the woods	Stay dry, block wind, insulate from the ground.
 where is the best place to build a shelter	Dry, sheltered high ground, no dead trees above.
 hypothermia signs	Shivering, confusion, slurred speech, drowsy.
-what should i do if my friend has hypothermia	Get dry and warm; warm the chest and core first.
+what should i do if my friend has hypothermia	Get help; dry them, gently warm the core first.
 should i rub my frostbitten fingers	No. Rubbing damages the frozen tissue.
 i fell through the ice what do i do	Turn back the way you came, kick, pull, roll.
-how thick does ice have to be to walk on it	At least 4 inches (10 cm) of clear ice.
+how thick does ice have to be to walk on it	4+ in (10 cm) clear ice; more on rivers.
 is it good to drink alcohol when cold	No. It makes you lose heat faster.
 my car is stuck in the snow	Stay in; run it 10 min an hour, exhaust clear.
 how do i call for help without a phone	3 whistle blasts, a mirror, bright colors, fire.
 whats the sos signal	... --- ... (3 short, 3 long, 3 short).
 how can i find north with no compass	Sun, shadow stick, or the North Star.
-how do you find the north star	Follow the Big Dipper's 2 end stars to Polaris.
+how do you find the north star	Big Dipper's 2 bowl-lip stars point to Polaris.
 does moss really grow on the north side	Not reliably. Don't navigate by moss.
 what should i do if i get lost in the forest	Stop and stay put, keep warm, signal for help.
 how do i make my phone battery last longer	Airplane mode, low brightness, check it rarely.
 should i run away from a bear	No. Never run; bears can run 35 mph.
-grizzly attack what do i do	Play dead on your stomach, hands behind neck.
+grizzly attack what do i do	Play dead face down; fight if it persists.
 what to do if a black bear attacks you	Fight back hard; aim at its face.
 a snake bit me	Get help; keep still and calm, no tourniquet.
 should i suck the venom out	No. Don't cut, suck, ice or tie it off.
@@ -390,7 +391,7 @@ keep bears away from food	Bear canister, 100 yards from your tent.
 what should i do if im outside during lightning	Get inside a building or hard-top car now.
 how do i know how far lightning is	Seconds to thunder / 5 = miles (/ 3 = km).
 where should i go during a tornado	Basement or small interior room, lowest floor.
-is it safe to drive through a flooded road	No. 1 foot of moving water can sweep a car away.
+is it safe to drive through a flooded road	Don't. 12 in of moving water sweeps a car away.
 what to do in a flash flood	Get to higher ground; never walk or drive in it.
 earthquake what should i do	Drop, cover and hold on.
 tsunami what do i do	Go to high ground or inland right away.
@@ -399,8 +400,8 @@ how long will food in the fridge last if the power goes out	4 hours if the door 
 how do i get out of a rip current	Don't fight it; swim parallel to the shore.
 my car is sinking what do i do	Seatbelt off, window open, get out now.
 someone is bleeding a lot	Press hard on the wound and don't let up.
-where does a tourniquet go	2 to 3 inches above the wound, not on a joint.
-how do i treat someone in shock	Lay them down, raise legs if unhurt, keep warm.
+where does a tourniquet go	2-3 in above wound, not a joint; tighten hard.
+how do i treat someone in shock	Call help; lay flat, raise legs if unhurt, warm.
 heat stroke what to do	Call emergency help; cool them fast with water.
 should i pop my blister	Don't pop it; pad it and keep it clean.
 what knot should i use to tie two ropes	Sheet bend, or a square knot for equal ropes.
@@ -418,8 +419,8 @@ how many calories do i need to survive	I don't know.
 how to treat a jellyfish sting	I don't know.
 how to survive a plane crash	I don't know.
 # survival, second batch: written after the first was tuned, scored once before any change
-whats the fastest way to purify water	Boil it for 1 minute (3 above 6,500 ft).
-how many minutes should i boil water	1 minute at a rolling boil.
+whats the fastest way to purify water	Boil it for 1 minute (3 above 5,000 ft).
+how many minutes should i boil water	1 minute at a rolling boil (3 above 5,000 ft).
 is it safe to drink water from a puddle	Not untreated. Boil, filter or disinfect it.
 can i drink salt water to survive	No. It dehydrates you faster.
 can you drink pee	No. It's salty waste and worsens dehydration.
@@ -430,10 +431,10 @@ how do i make a fire without a lighter or matches	Ferro rod, lens, bow drill, or
 how do i keep my campfire going	I don't know.
 can i sleep in a tent with a heater	No. Fire and carbon monoxide risk.
 how cold is too cold to sleep outside	I don't know.
-how to warm up a person with hypothermia	Get dry and warm; warm the chest and core first.
-what helps frostbite	Rewarm in warm, not hot, water. Don't rub it.
-how thick should lake ice be to walk on	At least 4 inches (10 cm) of clear ice.
-is it safe to walk on a frozen lake	At least 4 inches (10 cm) of clear ice.
+how to warm up a person with hypothermia	Get help; dry them, gently warm the core first.
+what helps frostbite	Warm, not hot, water if it won't refreeze.
+how thick should lake ice be to walk on	4+ in (10 cm) clear ice; more on rivers.
+is it safe to walk on a frozen lake	4+ in (10 cm) clear ice; more on rivers.
 how long can you survive in freezing water	About 1 hour until you pass out in icy water.
 what do i do if my car breaks down in the snow	Stay in; run it 10 min an hour, exhaust clear.
 what are the symptoms of heat stroke	Hot red skin, confusion, 103 F (39.4 C) or more.
@@ -441,19 +442,19 @@ my friend passed out from the heat	Call emergency help; cool them fast with wate
 how to survive in extreme heat	Shade by day, move at night, keep skin covered.
 how many whistle blasts means help	Three of anything: 3 blasts, 3 fires, 3 flashes.
 how do you write sos in morse	... --- ... (3 short, 3 long, 3 short).
-which way is north at night	Follow the Big Dipper's 2 end stars to Polaris.
+which way is north at night	Big Dipper's 2 bowl-lip stars point to Polaris.
 is it safe to eat insects	Yes, cooked. Skip bright, hairy or smelly ones.
 can i eat a raw fish i caught	No. Cook freshwater fish to kill parasites.
-is it true you should play dead for bears	Grizzly: yes. Black bear: no, fight back.
+is it true you should play dead for bears	Grizzly: yes; fight if it persists. Black: no.
 when should i spray bear spray	Aim slightly low at a charging bear and spray.
-a moose is charging at me	Run and get behind a tree or a car.
+a moose is charging at me	Keep away; if it charges, get behind a tree.
 i got bitten by a rattlesnake	Get help; keep still and calm, no tourniquet.
 how do i take off a tick	Tweezers at the skin; pull straight up, steady.
 a dog bit me	Wash it with soap for 15 min; get medical care.
 what do i do if lightning is close	Get inside a building or hard-top car now.
-is it safe to stand under a tree in a thunderstorm	Leave high ground and water; avoid lone trees.
+is it safe to stand under a tree in a thunderstorm	Get off high ground and water; not under trees.
 what room is safest in a tornado	Basement or small interior room, lowest floor.
-how deep of water can move a car	No. 1 foot of moving water can sweep a car away.
+how deep of water can move a car	Don't. 12 in of moving water sweeps a car away.
 what should i do when the ground starts shaking	Drop, cover and hold on.
 what to do if a wildfire is coming	Leave early when told; don't wait for flames.
 the power went out what should i do	Flashlights, not candles; keep the fridge shut.
@@ -486,12 +487,12 @@ is it safe to drink water from a river	Not untreated. Boil, filter or disinfect 
 how many drops of bleach to clean a gallon of water	8 drops of 6% bleach per gallon; wait 30 min.
 how long does it take to die of thirst	About 3 days.
 what are the first signs of hypothermia	Shivering, confusion, slurred speech, drowsy.
-what should i do for someone with frostbite	Rewarm in warm, not hot, water. Don't rub it.
+what should i do for someone with frostbite	Warm, not hot, water if it won't refreeze.
 how can i tell if i have heat stroke	Hot red skin, confusion, 103 F (39.4 C) or more.
 how to cool down someone with heat exhaustion	Cool place, loosen clothes, sip water.
 how do i signal a plane for help	V means need help, X means need medical help.
 what does 3 whistles mean	Three of anything: 3 blasts, 3 fires, 3 flashes.
-how do i navigate using the stars	Follow the Big Dipper's 2 end stars to Polaris.
+how do i navigate using the stars	Big Dipper's 2 bowl-lip stars point to Polaris.
 how do you use a stick to find direction	Mark the shadow tip twice, 15 min apart: W to E.
 is it safe to eat grasshoppers	Yes, cooked. Skip bright, hairy or smelly ones.
 should i eat mushrooms if im starving	No, unless an expert IDs them. Some are deadly.

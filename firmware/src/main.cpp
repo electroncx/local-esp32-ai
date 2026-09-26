@@ -85,6 +85,9 @@ void loop() {
             Serial.print("you: ");
         } else if (line_len < sizeof line - 1) {
             line[line_len++] = c;
+        } else {  // too long: keep the end, like the engine does (the question is usually last)
+            memmove(line, line + 1, sizeof line - 2);
+            line[sizeof line - 2] = c;
         }
     }
 }

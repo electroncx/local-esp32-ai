@@ -350,7 +350,11 @@ static int numbers_question(char **tok, int n, char *out, int out_len) {
     if (!strcmp(target, "roman") &&
         (words == 1 || (words == 2 && (!strcmp(tok[n - 1], "numerals") || !strcmp(tok[n - 1], "numeral"))))) {
         if (v < 1 || v > 3999) snprintf(out, (size_t)out_len, "Roman numerals only go from 1 to 3999.");
-        else to_roman((int)v, out);
+        else {
+            char r[16];  // longest is MMMDCCCLXXXVIII, 15 letters
+            to_roman((int)v, r);
+            snprintf(out, (size_t)out_len, "%s", r);
+        }
         return 1;
     }
     if (words != 1) return 0;

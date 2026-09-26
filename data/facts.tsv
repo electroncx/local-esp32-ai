@@ -612,8 +612,8 @@ are you chatgpt|are you claude	No. I'm a tiny offline model on an ESP32.
 what temperature should chicken be cooked to|how hot should chicken be|safe temperature for chicken|chicken internal temperature|what temp is chicken done|how hot should chicken be inside|safe temp for chicken	165 F (74 C).
 what temperature should turkey be cooked to|what temperature should ground turkey be cooked to|ground turkey internal temperature|safe temperature for ground turkey|how hot should turkey be|safe temperature for turkey|turkey internal temperature|what temp is turkey done	165 F (74 C).
 what temperature should ground beef be cooked to|how hot should ground beef be|how hot should a burger be|safe temperature for ground beef|hamburger internal temperature|what temp is a burger done|burger internal temperature	160 F (71 C).
-what temperature should pork be cooked to|how hot should pork be|safe temperature for pork|pork internal temperature|what temp is pork done	145 F (63 C), then rest 3 minutes.
-what temperature should steak be cooked to|how hot should steak be|safe temperature for steak|steak internal temperature|safe temperature for beef	145 F (63 C), then rest 3 minutes.
+what temperature should pork be cooked to|how hot should pork be|safe temperature for pork|pork internal temperature|what temp is pork done	Whole cuts 145 F (63 C); ground 160 F.
+what temperature should steak be cooked to|how hot should steak be|safe temperature for steak|steak internal temperature	145 F (63 C), then rest 3 minutes.
 what temperature should fish be cooked to|how hot should fish be|safe temperature for fish|fish internal temperature|salmon internal temperature	145 F (63 C).
 what temperature should leftovers be reheated to|reheat leftovers temperature|safe temperature to reheat food	165 F (74 C).
 what temperature should a fridge be|how cold should a fridge be|fridge temperature|what temp should my fridge be|refrigerator temperature	40 F (4 C) or below.
@@ -660,15 +660,15 @@ what is the emergency number in china|china emergency number	110 police, 119 fir
 what is the emergency number in south korea|korea emergency number	112 police; 119 fire and ambulance.
 what is the emergency number in brazil|brazil emergency number	190 police, 192 ambulance, 193 fire.
 what is the emergency number in the philippines|philippines emergency number	911.
-what is the emergency number in south africa|south africa emergency number	10111 police; 112 from a mobile.
+what is the emergency number in south africa|south africa emergency number	10111 police, 10177 ambulance; 112 from mobile.
 what is the poison control number|poison control phone number|poison control hotline	1-800-222-1222 in the US.
 what is the suicide hotline number|suicide crisis line|crisis hotline number|who do i call if i feel suicidal	988 in the US: call or text.
 # ---- everyday: first aid (Red Cross / NHS basics)
 what do i do for a burn|how do you treat a burn|burn first aid|how to treat a burn	Cool it under running water for 20 minutes.
-what do i do if someone is choking|how to help someone choking|choking first aid|someone is choking	5 back blows, then 5 abdominal thrusts.
+what do i do if someone is choking|how to help someone choking|choking first aid|someone is choking	Age 1+: 5 back blows, then 5 abdominal thrusts.
 how do you do cpr|how many compressions for cpr|how many compressions and breaths|how to do cpr|cpr steps|what is the cpr ratio	30 chest compressions, then 2 breaths.
 how fast should cpr compressions be|cpr compression rate|how many compressions per minute	100 to 120 per minute.
-how deep are cpr compressions|cpr compression depth	At least 2 inches (5 cm) for adults.
+how deep are cpr compressions|cpr compression depth	2 to 2.4 inches (5 to 6 cm) for adults.
 how do you stop a nosebleed|what to do for a nosebleed|nosebleed first aid	Lean forward and pinch the soft nose 10 minutes.
 what do i do for a bee sting|how to treat a bee sting|bee sting first aid	Scrape out the stinger, then apply a cold pack.
 how do you treat a sprain|what to do for a sprained ankle|sprain first aid	Rest, ice, compression, elevation.
@@ -739,7 +739,7 @@ how long does raw chicken last in the fridge|how long is raw chicken good for|ra
 how long does ground beef last in the fridge|how long is raw ground beef good for|raw ground beef in the fridge	1 to 2 days.
 how long does cooked rice last in the fridge|how long is cooked rice good for|cooked rice in the fridge	3 to 4 days.
 can you refreeze thawed meat|is it safe to refreeze meat|can i refreeze thawed chicken	Yes, if it was thawed in the fridge.
-how long to boil water to make it safe|how long to boil water for drinking|boil water advisory how long|how many minutes should i boil water|how many minutes to boil water to purify it	1 minute at a rolling boil.
+how long to boil water to make it safe|how long to boil water for drinking|boil water advisory how long|how many minutes should i boil water|how many minutes to boil water to purify it	1 minute at a rolling boil (3 above 5,000 ft).
 # ---- everyday: more cooking
 how long to bake cookies|how long do cookies bake|cookie baking time	8 to 12 minutes at 350 F (175 C).
 how long to bake a potato|how long to bake potatoes|baked potato time	About 1 hour at 400 F (200 C).

@@ -21,7 +21,31 @@ TIERS = {
     "max4mb": _BASE + ["data/facts_survival_more.tsv", "data/facts_wikidata_max4mb.tsv"],
     "large": _BASE + ["data/facts_survival_more.tsv", "data/large/facts_wikidata.tsv"],
 }
-FACT_FILES = "small"
+SHIPPED_MODEL = os.path.join(os.path.dirname(__file__), "..", "firmware", "data", "model.bin")
+
+
+def tier_of(model):
+    """The fact set a model file knows: export.py writes it next to the model
+    (model.bin -> model.tier). The tests read it, so they check the right facts."""
+    try:
+        tier = open(os.path.splitext(model)[0] + ".tier").read().strip()
+    except OSError:
+        return "small"
+    assert tier in TIERS, f"{model}: unknown tier {tier!r}"
+    return tier
+
+
+def dropped_of(model):
+    """Keys of the facts a model file refuses because the model gets them wrong
+    and there was no room to store their answers (export.py --max-bytes)."""
+    try:
+        return {line.rstrip("\n") for line in open(os.path.splitext(model)[0] + ".dropped")}
+    except OSError:
+        return set()
+
+
+DEFAULT_TIER = tier_of(SHIPPED_MODEL)
+FACT_FILES = DEFAULT_TIER
 # Facts about named things (people, films, places). The gate needs every word
 # of one of their phrasings, so "obama" can't reach "michelle obama"; short
 # names ("einstein") are listed as aliases only where they are unambiguous.
@@ -97,6 +121,9 @@ def load_facts(pattern=FACT_FILES, strict=None, lenient=None):
     facts = []
     paths = TIERS[pattern] if pattern in TIERS else sorted(glob.glob(pattern))
     for path in paths:
+        if not os.path.exists(path):
+            raise SystemExit(f"{path} not found; build it with data/wikidata_facts.py --tier {pattern}"
+                             if "wikidata" in path else f"{path} not found")
         name = os.path.basename(path)
         for line in open(path, encoding="utf-8"):
             line = line.rstrip("\n")

@@ -26,7 +26,7 @@ STOP = {
     "much", "many", "there", "it", "its", "that", "this", "we", "my", "have", "has", "called",
     "just", "like", "um", "uh", "hmm", "now", "actually", "really", "some", "any", "all",
     "should", "need", "needs", "must", "supposed", "ought", "make", "makes", "whens", "wheres",
-    "hows", "whys", "gonna", "wanna", "take", "takes", "once", "after", "if", "am",
+    "hows", "whys", "gonna", "wanna", "take", "takes", "once", "after", "if", "am", "using",
 }
 SYNONYMS = {
     "begin": "start", "began": "start", "begins": "start", "started": "start", "starts": "start",

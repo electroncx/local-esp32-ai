@@ -34,7 +34,7 @@ from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "train"))
-from common import MAX_A, TIERS, load_facts, normalize  # noqa: E402
+from common import MAX_A, STRICT_FILES, TIERS, load_facts, normalize  # noqa: E402
 import gate_index  # noqa: E402
 
 ENDPOINT = "https://qlever.dev/api/wikidata"
@@ -76,7 +76,12 @@ def query(name, body):
     if not REFRESH and os.path.exists(path):
         return json.load(open(path))
     if not REFRESH and TIER == "small" and os.path.exists(legacy):
-        return json.load(open(legacy))
+        # One-time migration: the old name-only cache holds the small tier's
+        # queries. Re-save it under the hashed name, then it is never used again.
+        rows = json.load(open(legacy))
+        json.dump(rows, open(path, "w"))
+        os.remove(legacy)
+        return rows
     data = urllib.parse.urlencode({"query": PREFIXES + body}).encode()
     for attempt in range(8):
         try:
@@ -215,7 +220,9 @@ class Facts:
         # question word ("google founded") matches questions of every type.
         self.taken = defaultdict(set)
         root = os.path.join(HERE, "..")
-        hand = [os.path.join(root, f) for f in TIERS[TIER] if not f.endswith("_wikidata.tsv")]
+        # Every file of the tier except the Wikidata output itself (whatever its
+        # name: facts_wikidata.tsv, facts_wikidata_max4mb.tsv), which is rebuilt.
+        hand = [os.path.join(root, f) for f in TIERS[TIER] if os.path.basename(f) not in STRICT_FILES]
         for qs, a in [fact for f in hand for fact in load_facts(f)]:
             for q in qs:
                 t, w = signature(normalize(q))
@@ -235,8 +242,6 @@ class Facts:
         "albert einstein birthday"); they are never the fact's key."""
         if not answer or len(answer) > MAX_A:
             return
-        if min(len(normalize(q)) for q in questions) + len(answer) + 2 > CTX:
-            return  # the model could not fit key + answer in its context
         keep, sigs = [], []
         for q in questions:
             n = self.clean(q)
@@ -247,7 +252,8 @@ class Facts:
                 continue  # hand-written facts and better-known items win
             keep.append(n)
             sigs.append(sig)
-        if not keep:
+        # The key is the shortest phrasing kept; the model must fit key + answer.
+        if not keep or min(map(len, keep)) + len(answer) + 2 > CTX:
             return
         for t, w in sigs:
             self.claimed[w].add(t)

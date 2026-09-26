@@ -4,7 +4,7 @@
     python train/train.py --steps 300    # smoke test
     python train/train.py --resume       # continue from train/ckpt.pt.partial
 
-    # the 5.4M 2-bit model for 4 MB boards
+    # the 5.5M 2-bit model for 4 MB boards
     python train/train.py --tier max4mb --weights int2 --qat-from 0 --dim 320 \
         --layers 6 --heads 5 --kv-heads 1 --hidden 1024
 
@@ -14,11 +14,14 @@ no capacity is spent on typos and rephrasings — it all goes into facts.
 
 Loss is on answer characters only: the model never learns to produce a
 preamble or a sign-off. The last part of training is quantization-aware,
-so the int4 model on the chip answers like the float model here."""
+so the quantized (int4 or int2) model on the chip answers like the float
+model here."""
 
 import argparse
+import hashlib
 import math
 import random
+import sys
 import time
 
 import torch
@@ -73,7 +76,7 @@ def answer(model, q, cfg, max_new=48):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tier", default="small", choices=["small", "max4mb", "large"],
-                    help="fact set: small (2M int4), max4mb (8.7M ternary) or large (16 MB boards)")
+                    help="fact set: small (2M int4), max4mb (5.5M int2) or large (parked, needs data/large/)")
     ap.add_argument("--out", default="train/ckpt.pt")
     ap.add_argument("--steps", type=int, default=24000)
     ap.add_argument("--qat-from", type=float, default=0.5, help="fraction of steps before QAT starts")
@@ -106,8 +109,16 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.0)
     warm, qat_step = 200, int(args.steps * args.qat_from)
     partial, start = args.out + ".partial", 1
+    # A resumed run must be the same run: same facts, shape and schedule.
+    run = {k: v for k, v in vars(args).items() if k not in ("resume", "check_every", "final_check", "out")}
+    run["facts"] = hashlib.sha1(repr(facts).encode()).hexdigest()
     if args.resume:
         ck = torch.load(partial, map_location="cpu")
+        if "run" not in ck:
+            print("warning: old checkpoint without run settings; not checked", file=sys.stderr)
+        elif ck["run"] != run:
+            diff = {k: (ck["run"].get(k), v) for k, v in run.items() if ck["run"].get(k) != v}
+            sys.exit(f"--resume: this run differs from the checkpoint (was, now): {diff}")
         model.load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"])
         rng.setstate(ck["rng"])
@@ -118,7 +129,7 @@ def main():
     t0 = time.time()
     for step in range(start, args.steps + 1):
         model.set_qat(step >= qat_step)
-        if step == qat_step:
+        if step == max(qat_step, start):
             print("quantization-aware training on")
         lr = args.lr * min(step / warm, 0.5 * (1 + math.cos(math.pi * step / args.steps)))
         lr = max(lr, args.lr * 0.02)
@@ -138,7 +149,7 @@ def main():
             model.train()
             print(f"step {step:5d}  sampled exact match {ok}/{len(probe)}", flush=True)
             torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "rng": rng.getstate(),
-                        "step": step}, partial)
+                        "step": step, "run": run}, partial)
 
     model.eval()
     # A sample: export.py checks every fact on the real C engine anyway, and
@@ -149,7 +160,7 @@ def main():
           f"{'' if final is facts else ' sampled'}")
     for q, a in wrong[:20]:
         print(f"    {q!r} -> {answer(model, q, cfg)!r}, want {a!r}")
-    torch.save({"cfg": cfg.__dict__, "model": model.state_dict()}, args.out)
+    torch.save({"cfg": cfg.__dict__, "model": model.state_dict(), "tier": args.tier}, args.out)
     print(f"saved {args.out}")
 
 

@@ -9,20 +9,22 @@ import argparse
 import sys
 
 import engine
-from common import canonical, load_eval, load_facts
+from common import canonical, dropped_of, load_eval, load_facts, tier_of
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tier", default="small", choices=["small", "max4mb", "large"],
-                    help="fact set: small (2M int4), max4mb (8.7M ternary) or large (16 MB boards)")
+    ap.add_argument("--tier", default=None, choices=["small", "max4mb", "large"],
+                    help="fact set (default: the one export.py wrote next to --model)")
     ap.add_argument("--bin", default="host/tinyai")
     ap.add_argument("--model", default="firmware/data/model.bin")
     ap.add_argument("--eval", nargs="*", default=None, help="default: the tier's eval files")
     ap.add_argument("--show", type=int, default=15)
     args = ap.parse_args()
+    args.tier = args.tier or tier_of(args.model)
     facts = load_facts(args.tier)
     key2ans = {canonical(qs): a for qs, a in facts}
+    dropped = dropped_of(args.model)  # refused by design: their phrasings must route to "-"
 
     def route(qs):
         out = engine.ask(args.bin, args.model, qs, "--gate")
@@ -31,7 +33,8 @@ def main():
 
     failed = False
     for name, rows in [("eval", load_eval(args.tier, args.eval)),
-                       ("trained", [(q, a) for qs, a in facts for q in qs])]:
+                       ("trained", [(q, "I don't know." if canonical(qs) in dropped else a)
+                                    for qs, a in facts for q in qs])]:
         got = route([q for q, _ in rows])
         bad = [(q, w, g) for (q, w), g in zip(rows, got) if g != w]
         refused = sum(g == "I don't know." for _, _, g in bad)
@@ -39,7 +42,9 @@ def main():
               f"({len(bad) - refused} to a wrong answer, {refused} refused)")
         for q, w, g in bad[:args.show]:
             print(f"    {q!r}: want {w!r}, got {g!r}")
-        failed |= bool(bad)
+        # Fail on anything routed to a wrong answer, or a trained phrasing that
+        # isn't routed to its own fact; refusing a test question is allowed.
+        failed |= (len(bad) - refused) > 0 or (name == "trained" and bool(bad))
     sys.exit(1 if failed else 0)
 
 

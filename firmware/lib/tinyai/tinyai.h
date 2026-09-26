@@ -103,6 +103,10 @@ void tai_set_parallel(tai_model *m, tai_parallel_fn fn);
 // 2 = refused (unknown topic).
 int tai_ask(tai_model *m, const char *question, char *out, int out_len);
 
+// The stored answer for fact i (0-based) if it is on the errata list, else
+// NULL. "" = a fact the model gets wrong that is refused instead.
+const char *tai_errata(const tai_model *m, int fact);
+
 // Model only, no gate: generate from `question` as typed. For experiments.
 void tai_generate(tai_model *m, const char *question, char *out, int out_len);
 

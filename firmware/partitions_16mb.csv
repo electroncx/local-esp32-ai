@@ -1,4 +1,0 @@
-# Name,   Type, SubType, Offset,   Size
-# One big app partition for the 13M model on 16 MB boards (no OTA).
-nvs,      data, nvs,     0x9000,   0x5000
-app0,     app,  factory, 0x10000,  0xFF0000

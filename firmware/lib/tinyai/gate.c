@@ -27,7 +27,7 @@ static const char *const STOP[] = {
     "much", "many", "there", "it", "its", "that", "this", "we", "my", "have", "has", "called",
     "just", "like", "um", "uh", "hmm", "now", "actually", "really", "some", "any", "all",
     "should", "need", "needs", "must", "supposed", "ought", "make", "makes", "whens", "wheres",
-    "hows", "whys", "gonna", "wanna", "take", "takes", "once", "after", "if", "am",
+    "hows", "whys", "gonna", "wanna", "take", "takes", "once", "after", "if", "am", "using",
 };
 
 // Words that add context but never change which fact is meant
@@ -108,6 +108,7 @@ static int content_words(const char *s, char w[MAX_WORDS][MAX_WLEN]) {
 static int edit_distance(const char *a, const char *b) {
     int la = (int)strlen(a), lb = (int)strlen(b);
     int row[MAX_WLEN + 1];
+    if (lb > MAX_WLEN) return MAX_WLEN;  // longer than row[] holds: no match
     for (int j = 0; j <= lb; j++) row[j] = j;
     for (int i = 1; i <= la; i++) {
         int diag = row[0];
@@ -324,6 +325,11 @@ static int method_start(const char *norm) {
 int tai_gate(const tai_model *m, const char *norm) {
     char in[MAX_WORDS][MAX_WLEN];
     int n = content_words(norm, in), tin = qtype(norm), len = (int)strlen(norm);
+    // Only numbers ("42"): they name nothing on their own, so they may not
+    // stand in for "element 42".
+    int wordy = 0;
+    for (int i = 0; i < n; i++)
+        for (const char *c = in[i]; *c; c++) wordy |= *c >= 'a' && *c <= 'z';
     // One dictionary lookup per input word, and per adjacent pair joined
     // ("humming bird" -> "hummingbird"). Static: too big for a small stack.
     static hits word[MAX_WORDS], joined[MAX_WORDS];
@@ -440,7 +446,7 @@ int tai_gate(const tai_model *m, const char *norm) {
             }
             // A strict phrasing names something ("michelle obama"): all of it
             // must be in the question, or "obama" alone would reach it.
-            if (2 * b_matched < nk || ((cross || strict) && b_matched < nk)) continue;
+            if (2 * b_matched < nk || ((cross || strict || !wordy) && b_matched < nk)) continue;
             // ...and only when every word of a 2+ word phrasing is there, so
             // the extra word is context, not a different subject.
             if (extra && (b_matched < nk || nk < 2)) continue;

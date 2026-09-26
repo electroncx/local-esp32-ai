@@ -49,6 +49,7 @@ static int encode_char(char c) { return (c >= 32 && c <= 126) ? c - 30 : 2; }
 // extra words, with a space before it unless it starts the key.
 int tai_fact(const tai_model *m, int i, char *out, int out_len) {
     const uint8_t *c = m->keys;
+    if (out_len < 1 || i < 0 || i >= m->n_facts) return 0;
     for (; i > 0; c++)
         if (*c >= 0x80) c++;
         else if (!*c) i--;
@@ -76,6 +77,7 @@ typedef struct {
 
 static const void *take(reader *r, size_t bytes) {
     const uint8_t *p = r->p;
+    if (bytes > (size_t)(r->end - p)) return NULL;  // checked before rounding can wrap
     bytes = (bytes + 3) & ~(size_t)3;  // every block is 4-byte aligned
     if ((size_t)(r->end - p) < bytes) return NULL;
     r->p += bytes;
@@ -112,15 +114,70 @@ static int take_q4(reader *r, tai_q4 *w, int rows, int cols) {
     return w->q && w->s && cols % TAI_GROUP == 0 ? 0 : -1;
 }
 
-static const char *take_strings(reader *r) {
+// A block of NUL-terminated strings; *n = its size. NULL unless it ends in NUL.
+static const char *take_strings(reader *r, uint32_t *n) {
     const uint32_t *len = (const uint32_t *)take(r, 4);
-    return len ? (const char *)take(r, *len) : NULL;
+    if (!len || !*len) return NULL;
+    const char *s = (const char *)take(r, *len);
+    if (!s || s[*len - 1]) return NULL;
+    *n = *len;
+    return s;
+}
+
+// The number of NUL-terminated strings in s[0..n).
+static int strings_in(const char *s, uint32_t n) {
+    int c = 0;
+    for (uint32_t i = 0; i < n; i++) c += !s[i];
+    return c;
+}
+
+// Everything the engine indexes with, cross-checked once so a damaged file
+// fails to load instead of reading out of bounds later.
+static int consistent(const tai_model *m, uint32_t words_len, uint32_t extras_len, uint32_t keys_len,
+                      uint32_t errata_len, uint32_t n_ids) {
+    int n_codes = m->n_words + m->n_extra;
+    if (n_codes > 32768) return 0;
+    for (int i = 0; i < m->n_words; i++)
+        if (m->word_off[i] >= words_len || !(m->word_len[i] & 0x7f)) return 0;
+    for (int i = 0; i < m->n_extra; i++)
+        if (m->extra_off[i] >= extras_len) return 0;
+    long sum = 0;
+    for (int i = 0; i < m->n_facts; i++) sum += m->fact_count[i];
+    if (sum != m->n_known) return 0;
+    sum = 0;
+    for (int i = 0; i < m->n_known; i++) sum += m->known_nwords[i];
+    if (sum != (long)n_ids) return 0;
+    for (uint32_t i = 0; i < n_ids; i++)
+        if (m->known_words[i] >= m->n_words) return 0;
+    int keys = 0;
+    for (uint32_t i = 0; i < keys_len; i++) {
+        uint8_t c = (uint8_t)m->keys[i];
+        if (c >= 0x80) {
+            if (i + 1 >= keys_len || ((c & 0x7f) << 8 | (uint8_t)m->keys[i + 1]) >= n_codes) return 0;
+            i++;
+        } else if (!c) {
+            keys++;
+        }
+    }
+    if (keys != m->n_facts) return 0;
+    if (strings_in(m->errata, errata_len) < m->n_errata) return 0;
+    for (int i = 0; i < m->n_errata; i++)
+        if (m->errata_fact[i] >= m->n_facts || (i && m->errata_fact[i] <= m->errata_fact[i - 1])) return 0;
+    return 1;
 }
 
 static void *zalloc(size_t n) { return calloc(1, n); }
 
+static int load(tai_model *m, const uint8_t *blob, size_t len);
+
 int tai_load(tai_model *m, const uint8_t *blob, size_t len) {
     memset(m, 0, sizeof *m);
+    int rc = load(m, blob, len);
+    if (rc) tai_free(m);  // a failed load holds nothing
+    return rc;
+}
+
+static int load(tai_model *m, const uint8_t *blob, size_t len) {
     if (((uintptr_t)blob & 3) != 0) return -2;
     reader r = {blob, blob + len};
     const uint32_t *h = (const uint32_t *)take(&r, 11 * 4);
@@ -138,6 +195,11 @@ int tai_load(tai_model *m, const uint8_t *blob, size_t len) {
     m->hidden = (int)h[8];
     m->n_facts = (int)h[9];
     m->n_known = (int)h[10];
+    // Sane caps keep every size product below 2^31, also on the 32-bit ESP32.
+    if (h[2] < 97 || h[2] > 256 || !h[3] || h[3] > 1024 || !h[4] || h[4] > 4096 || !h[5] || h[5] > 64 ||
+        !h[6] || h[6] > 256 || !h[7] || h[7] > h[6] || h[6] % h[7] || h[4] % h[6] || !h[8] ||
+        h[8] > 16384 || h[9] > 65536 || h[10] > (1u << 24))
+        return -1;
     int D = m->dim, H = m->hidden, KV = m->kv_heads * (D / m->heads);
 
     if (take_q8(&r, &m->tok, m->vocab, D) || take_q8(&r, &m->pos, m->ctx, D)) return -1;
@@ -155,8 +217,10 @@ int tai_load(tai_model *m, const uint8_t *blob, size_t len) {
     m->norm = (const float *)take(&r, (size_t)D * 4);
     const uint32_t *nw = (const uint32_t *)take(&r, 4);
     if (!m->norm || !nw) return -1;
+    if (*nw > 32768) return -1;
     m->n_words = (int)*nw;
-    m->words = take_strings(&r);
+    uint32_t words_len = 0, extras_len = 0, keys_len = 0, errata_len = 0, talk_len = 0;
+    m->words = take_strings(&r, &words_len);
     m->word_off = (const uint32_t *)take(&r, (size_t)m->n_words * 4);
     m->word_len = (const uint8_t *)take(&r, (size_t)m->n_words);
     m->fact_count = (const uint8_t *)take(&r, (size_t)m->n_facts);
@@ -167,20 +231,23 @@ int tai_load(tai_model *m, const uint8_t *blob, size_t len) {
     if (!m->words || !m->word_off || !m->word_len || !m->fact_count || !m->known_qtype ||
         !m->known_nwords || !m->known_len || !n_ids)
         return -1;
+    if (*n_ids > (1u << 26)) return -1;
     m->known_words = (const uint16_t *)take(&r, (size_t)*n_ids * 2);
-    m->small_talk = take_strings(&r);
+    m->small_talk = take_strings(&r, &talk_len);
     const uint32_t *n_extra = (const uint32_t *)take(&r, 4);
-    if (!m->known_words || !m->small_talk || !n_extra) return -1;
+    if (!m->known_words || !m->small_talk || !n_extra || *n_extra > 32768) return -1;
     m->n_extra = (int)*n_extra;
     m->extra_off = (const uint16_t *)take(&r, (size_t)m->n_extra * 2);
-    m->extras = take_strings(&r);
-    m->keys = (const uint8_t *)take_strings(&r);
+    m->extras = take_strings(&r, &extras_len);
+    m->keys = (const uint8_t *)take_strings(&r, &keys_len);
     const uint32_t *n_err = (const uint32_t *)take(&r, 4);
-    if (!m->extra_off || !m->extras || !m->keys || !n_err) return -1;
+    if (!m->extra_off || !m->extras || !m->keys || !n_err || *n_err > (uint32_t)m->n_facts) return -1;
     m->n_errata = (int)*n_err;
     m->errata_fact = (const uint16_t *)take(&r, (size_t)m->n_errata * 2);
-    m->errata = take_strings(&r);
-    if (!m->errata_fact || !m->errata) return -1;
+    m->errata = take_strings(&r, &errata_len);
+    if (!m->errata_fact || !m->errata ||
+        !consistent(m, words_len, extras_len, keys_len, errata_len, *n_ids))
+        return -1;
 
     int big = H > D ? H : D;
     m->x = (float *)zalloc((size_t)D * 4);
@@ -213,13 +280,12 @@ int tai_load(tai_model *m, const uint8_t *blob, size_t len) {
 }
 
 void tai_free(tai_model *m) {
-    if (m->kc)
-        for (int l = 0; l < m->layers; l++) {
-            free(m->kc[l]);
-            free(m->vc[l]);
-            free(m->ks[l]);
-            free(m->vs[l]);
-        }
+    for (int l = 0; l < m->layers; l++) {  // also after a load that failed halfway
+        if (m->kc) free(m->kc[l]);
+        if (m->vc) free(m->vc[l]);
+        if (m->ks) free(m->ks[l]);
+        if (m->vs) free(m->vs[l]);
+    }
     free(m->kc); free(m->vc); free(m->ks); free(m->vs);
     free(m->x); free(m->xb); free(m->q); free(m->k); free(m->v);
     free(m->hb); free(m->att); free(m->logits); free(m->xq); free(m->xsum); free(m->layer);
@@ -474,38 +540,53 @@ static void generate_normalized(tai_model *m, const char *norm, char *out, int o
 }
 
 void tai_generate(tai_model *m, const char *question, char *out, int out_len) {
+    if (out_len < 1) return;
     char norm[TAI_MAX_Q + 1];
     tai_normalize(question, norm, sizeof norm);
     generate_normalized(m, norm, out, out_len);
 }
 
 static void copy_out(char *out, int out_len, const char *s) {
+    if (out_len < 1) return;
     int n = (int)strlen(s);
     if (n > out_len - 1) n = out_len - 1;
     memcpy(out, s, (size_t)n);
     out[n] = 0;
 }
 
+const char *tai_errata(const tai_model *m, int fact) {
+    const char *s = m->errata;
+    for (int i = 0; i < m->n_errata && m->errata_fact[i] <= fact; i++, s += strlen(s) + 1)
+        if (m->errata_fact[i] == fact) return s;
+    return NULL;
+}
+
 int tai_ask(tai_model *m, const char *question, char *out, int out_len) {
     char norm[TAI_MAX_Q + 1];
+    if (out_len < 1) return 2;
     tai_normalize(question, norm, sizeof norm);
     if (!norm[0]) {
         copy_out(out, out_len, "Ask a question.");
         return 2;
     }
-    if (tai_calc(norm, out, out_len)) return 1;
+    if (tai_calc(norm, out, out_len)) {
+        // Computed answers obey the same cap as the model's ("tip on 123456789012").
+        if ((int)strlen(out) <= TAI_MAX_A) return 1;
+        copy_out(out, out_len, "I don't know.");
+        return 2;
+    }
     int fact = tai_gate(m, norm);
     if (!fact) {
         copy_out(out, out_len, "I don't know.");
         return 2;
     }
-    // A fact on the errata list is answered from its stored text.
-    const char *fixed = m->errata;
-    for (int i = 0; i < m->n_errata && m->errata_fact[i] <= fact - 1; i++, fixed += strlen(fixed) + 1)
-        if (m->errata_fact[i] == fact - 1) {
-            copy_out(out, out_len, fixed);
-            return 0;
-        }
+    // A fact on the errata list is answered from its stored text; an empty
+    // text means the model gets it wrong and there was no room to store it.
+    const char *fixed = tai_errata(m, fact - 1);
+    if (fixed) {
+        copy_out(out, out_len, *fixed ? fixed : "I don't know.");
+        return *fixed ? 0 : 2;
+    }
     // The model answers the matched fact's canonical key (its shortest
     // phrasing), not the raw text: it only ever sees inputs it was trained on.
     char key[TAI_MAX_Q + 1];

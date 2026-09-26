@@ -9,7 +9,8 @@
 typedef struct {
     const char *p;
     int err;
-    int pct;  // the last number read had a % sign
+    int pct;    // the last number read had a % sign
+    int depth;  // nesting, capped: the ESP32's loop task has an 8 KB stack
 } parser;
 
 static void skip(parser *ps) {
@@ -35,10 +36,6 @@ static double atom(parser *ps) {
         if (*ps->p != ')') ps->err = 1;
         else ps->p++;
         return v;
-    }
-    if (*ps->p == '-') {
-        ps->p++;
-        return -atom(ps);
     }
     if (!((*ps->p >= '0' && *ps->p <= '9') || *ps->p == '.')) {
         ps->err = 1;
@@ -70,13 +67,26 @@ static double atom(parser *ps) {
     return v;
 }
 
+// Unary minus binds looser than ^, as in math: -2^2 = -4, 2^-1 = 0.5.
 static double power(parser *ps) {
-    double v = atom(ps);
-    skip(ps);
-    if (*ps->p == '^') {
-        ps->p++;
-        v = pow(v, power(ps));  // right associative
+    if (++ps->depth > 16) {  // "((((((...": refuse rather than overflow the stack
+        ps->err = 1;
+        return 0;
     }
+    double v;
+    skip(ps);
+    if (*ps->p == '-') {
+        ps->p++;
+        v = -power(ps);
+    } else {
+        v = atom(ps);
+        skip(ps);
+        if (*ps->p == '^') {
+            ps->p++;
+            v = pow(v, power(ps));  // right associative
+        }
+    }
+    ps->depth--;
     return v;
 }
 
@@ -178,7 +188,7 @@ int tai_calc(const char *norm, char *out, int out_len) {
     }
     if (!digits || !ops) return 0;
 
-    parser ps = {s, 0, 0};
+    parser ps = {s, 0, 0, 0};
     double v = expr(&ps);
     skip(&ps);
     if (*ps.p) ps.err = 1;
@@ -195,7 +205,7 @@ int tai_calc(const char *norm, char *out, int out_len) {
         snprintf(out, (size_t)out_len, "Undefined.");
         return 1;
     }
-    if (fabs(v - llround(v)) < 1e-9 && fabs(v) < 1e15)
+    if (fabs(v) < 1e15 && fabs(v - llround(v)) < 1e-9)
         snprintf(out, (size_t)out_len, "%lld", (long long)llround(v));
     else
         snprintf(out, (size_t)out_len, "%.6g", v);

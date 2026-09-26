@@ -65,6 +65,14 @@ int main(int argc, char **argv) {
             fflush(stdout);
         }
         if (!fgets(line, sizeof line, stdin)) break;
+        // A line longer than the buffer: keep its end, as the engine keeps
+        // the end of a long question, instead of splitting it in two.
+        for (size_t n = strlen(line); n && line[n - 1] != '\n';) {
+            int c = getchar();
+            if (c == EOF) break;
+            memmove(line, line + 1, n - 1);
+            line[n - 1] = (char)c;
+        }
         line[strcspn(line, "\r\n")] = 0;
         if (words) {  // the line is already normalized (as stored in the index)
             char w[512];
@@ -76,11 +84,12 @@ int main(int argc, char **argv) {
             char norm[TAI_MAX_Q + 1];
             tai_normalize(line, norm, sizeof norm);
             if (!norm[0]) printf("-\n");
-            else if (tai_calc(norm, out, sizeof out)) printf("=%s\n", out);
+            else if (tai_calc(norm, out, sizeof out)) printf(strlen(out) > TAI_MAX_A ? "-\n" : "=%s\n", out);
             else {
                 int g = tai_gate(&m, norm);
                 char key[TAI_MAX_Q + 1] = "-";
-                if (g) tai_fact(&m, g - 1, key, sizeof key);
+                // a fact refused by design (empty errata) has an empty key
+                if (g && !tai_fact(&m, g - 1, key, sizeof key)) strcpy(key, "-");
                 printf("%s\n", key);
             }
             continue;
@@ -99,7 +108,7 @@ int main(int argc, char **argv) {
             tai_normalize(line, norm, sizeof norm);
             int g = tai_gate(&m, norm);
             char key[TAI_MAX_Q + 1] = "-";
-            if (g) tai_fact(&m, g - 1, key, sizeof key);
+            if (g && !tai_fact(&m, g - 1, key, sizeof key)) strcpy(key, "-");
             printf("\t[%s] -> [%s]", norm, key);
         }
         printf("\n");
