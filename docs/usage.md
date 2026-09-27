@@ -23,7 +23,7 @@ Type a question and press Enter. It answers in one short line.
 
 ```
 you: how to purify water
-esp: Boil it for 1 minute (3 above 6,500 ft).
+esp: Boil it for 1 minute (3 above 5,000 ft).
 ```
 
 No capitals, punctuation or perfect spelling needed.
@@ -45,7 +45,7 @@ It matches words, not meaning, so every extra word is another chance to miss. Wh
 **Survival**
 
 ```
-purify water                         Boil it for 1 minute (3 above 6,500 ft).
+purify water                         Boil it for 1 minute (3 above 5,000 ft).
 can i eat snow                       Melt it first; eating it chills you.
 how to start a fire without matches  Ferro rod, lens, bow drill, or battery and wool.
 what do i do if i get lost           Stop and stay put, keep warm, signal for help.
