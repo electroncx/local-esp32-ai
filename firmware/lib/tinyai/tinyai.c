@@ -6,7 +6,6 @@
 // bandwidth is the bottleneck, so fewer bits per weight means faster tokens.
 #include "tinyai.h"
 
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -294,10 +293,63 @@ void tai_free(tai_model *m) {
 
 // ---------------------------------------------------------------- math
 
+// Every chip must compute the same answer bit for bit: export.py finds the
+// facts the model gets wrong on a PC, and a 2-bit model's margins are small
+// enough for one differing last bit to change an answer. So inference uses
+// only +, -, * and int <-> float conversions, which IEEE 754 rounds the same
+// everywhere, and is built with -ffp-contract=off (no fused multiply-add,
+// which the ESP32's FPU has and most PC builds don't use). libm's expf, tanhf
+// and sqrtf, and division, differ between toolchains; these replace them.
+
+static float from_bits(uint32_t u) {
+    float f;
+    memcpy(&f, &u, 4);
+    return f;
+}
+
+static uint32_t to_bits(float f) {
+    uint32_t u;
+    memcpy(&u, &f, 4);
+    return u;
+}
+
+// 1/x for a normal x > 0: bit-trick estimate, then Newton steps.
+static float recip(float x) {
+    float y = from_bits(0x7EF311C7u - to_bits(x));
+    for (int i = 0; i < 5; i++) y = y * (2.0f - x * y);
+    return y;
+}
+
+// 1/sqrt(x) for a normal x > 0, the same way.
+static float rsqrt(float x) {
+    float y = from_bits(0x5F3759DFu - (to_bits(x) >> 1));
+    for (int i = 0; i < 4; i++) y = y * (1.5f - 0.5f * x * y * y);
+    return y;
+}
+
+// e^x: x = k ln2 + r, e^r by its Taylor series, times 2^k built from bits.
+static float exp_(float x) {
+    if (x < -87.0f) return 0.0f;
+    if (x > 87.0f) x = 87.0f;
+    float t = x * 1.44269504f;
+    int k = (int)(t < 0 ? t - 0.5f : t + 0.5f);
+    float r = x - (float)k * 0.693359375f;  // ln2 in two parts, the first exact
+    r = r + (float)k * 2.12194440e-4f;
+    float p = 1.0f / 5040;
+    p = p * r + 1.0f / 720;
+    p = p * r + 1.0f / 120;
+    p = p * r + 1.0f / 24;
+    p = p * r + 1.0f / 6;
+    p = p * r + 0.5f;
+    p = p * r + 1.0f;
+    p = p * r + 1.0f;
+    return p * from_bits((uint32_t)(127 + k) << 23);
+}
+
 static void rmsnorm(float *o, const float *x, const float *w, int n) {
     float ss = 0;
     for (int i = 0; i < n; i++) ss += x[i] * x[i];
-    ss = 1.0f / sqrtf(ss / n + 1e-5f);
+    ss = rsqrt(ss * recip((float)n) + 1e-5f);
     for (int i = 0; i < n; i++) o[i] = x[i] * ss * w[i];
 }
 
@@ -305,12 +357,19 @@ static void rmsnorm(float *o, const float *x, const float *w, int n) {
 static float quantize(int8_t *q, const float *x, int n) {
     float amax = 0;
     for (int i = 0; i < n; i++) {
-        float a = fabsf(x[i]);
+        float a = x[i] < 0 ? -x[i] : x[i];
         if (a > amax) amax = a;
     }
-    float s = amax / 127.0f;
-    float inv = s > 0 ? 1.0f / s : 0;
-    for (int i = 0; i < n; i++) q[i] = (int8_t)lrintf(x[i] * inv);
+    float s = amax * (1.0f / 127);
+    if (s < 1e-30f) {  // all (near) zero; also keeps recip() in its range
+        memset(q, 0, (size_t)n);
+        return 0;
+    }
+    float inv = recip(s);
+    for (int i = 0; i < n; i++) {
+        float v = x[i] * inv;  // within about +-127
+        q[i] = (int8_t)(v < 0 ? -(int)(0.5f - v) : (int)(v + 0.5f));
+    }
     return s;
 }
 
@@ -448,7 +507,11 @@ static void mm4(float *o, tai_model *m, const float *x, const tai_q4 *w) {
 }
 
 static float gelu(float x) {
-    return 0.5f * x * (1.0f + tanhf(0.7978845608f * (x + 0.044715f * x * x * x)));
+    float u = 0.7978845608f * (x + 0.044715f * x * x * x);
+    if (u > 10.0f) u = 10.0f;  // tanh is 1 to float precision well before this
+    if (u < -10.0f) u = -10.0f;
+    float tanh_u = 1.0f - 2.0f * recip(exp_(2.0f * u) + 1.0f);
+    return 0.5f * x * (1.0f + tanh_u);
 }
 
 static void softmax(float *x, int n) {
@@ -456,10 +519,11 @@ static void softmax(float *x, int n) {
     for (int i = 1; i < n; i++)
         if (x[i] > mx) mx = x[i];
     for (int i = 0; i < n; i++) {
-        x[i] = expf(x[i] - mx);
+        x[i] = exp_(x[i] - mx);
         sum += x[i];
     }
-    for (int i = 0; i < n; i++) x[i] /= sum;
+    float inv = recip(sum);  // sum >= 1: the largest term is e^0
+    for (int i = 0; i < n; i++) x[i] *= inv;
 }
 
 // ---------------------------------------------------------------- forward
@@ -483,7 +547,7 @@ static void forward(tai_model *m, int token, int pos) {
             m->ks[l][pos * NKV + h] = quantize(m->kc[l] + off, m->k + h * hd, hd);
             m->vs[l][pos * NKV + h] = quantize(m->vc[l] + off, m->v + h * hd, hd);
         }
-        float scale = 1.0f / sqrtf((float)hd);
+        float scale = rsqrt((float)hd);
         for (int h = 0; h < NH; h++) {
             int kvh = h / rep;  // grouped-query attention: heads share K/V
             const float *q = m->q + h * hd;

@@ -44,10 +44,14 @@ if [ -n "$qemu" ]; then
   python3 - "$qemu" <<'EOF'
 import random, subprocess, sys
 sys.path.insert(0, "train")
-from common import load_eval, load_facts
+from common import DEFAULT_TIER, canonical, dropped_of, load_eval, load_facts
 qemu = sys.argv[1]
-held = load_eval()
-trained = random.Random(7).sample([(q.lstrip("~"), a) for qs, a in load_facts() for q in qs], 200)
+held = load_eval(DEFAULT_TIER)
+# Trained questions the model itself answers (not refused for lack of room):
+# each runs the full float pipeline, which must match the PC bit for bit.
+dropped = dropped_of("firmware/data/model.bin")
+trained = random.Random(7).sample([(canonical(qs), a) for qs, a in load_facts(DEFAULT_TIER)
+                                   if canonical(qs) not in dropped], 200)
 rows = held[:150] + trained
 pc = subprocess.run(["host/tinyai", "firmware/data/model.bin"], input="\n".join(q for q, _ in rows) + "\n",
                     capture_output=True, text=True, check=True).stdout.split("\n")[:len(rows)]

@@ -1,4 +1,4 @@
-# More survival facts (the 8.7M model and up). Same rules as data/facts_survival.tsv:
+# More survival facts (the 5.5M 2-bit model, max4mb tier). Same rules as data/facts_survival.tsv:
 # short, direct answers following the source named in each section; the cautious answer wins.
 # ---- first aid (American Heart Association, Red Cross, NHS, CDC, ADA)
 how deep are cpr compressions for a child|cpr on a child|child cpr depth|how to do cpr on a kid	About 2 inches (5 cm), 1 or 2 hands.

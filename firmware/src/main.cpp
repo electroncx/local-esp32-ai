@@ -1,7 +1,7 @@
 // Offline survival and everyday answers on an ESP32. Type a question over serial:
 //
 //   you: how do i purify water
-//   esp: Boil it for 1 minute (3 above 6,500 ft).
+//   esp: Boil it for 1 minute (3 above 5,000 ft).
 #include <Arduino.h>
 
 #include "model_data.h"
