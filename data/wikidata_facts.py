@@ -39,7 +39,7 @@ import gate_index  # noqa: E402
 
 ENDPOINT = "https://qlever.dev/api/wikidata"
 CTX = 96  # model context, train/model.py
-UA = "local-esp32-ai/1.0 (offline Q&A dataset; https://github.com/l3afzy/local-esp32-ai)"
+UA = "local-esp32-ai/1.0 (offline Q&A dataset; https://github.com/electroncx/local-esp32-ai)"
 CACHE = os.path.join(HERE, "wikidata_cache")
 
 PREFIXES = """PREFIX wd: <http://www.wikidata.org/entity/>
