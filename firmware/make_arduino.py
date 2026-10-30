@@ -74,7 +74,9 @@ def build(out):
 
 
 def same_tree(a, b):
-    cmp = filecmp.dircmp(a, b)
+    """True if b holds exactly the files of a. The Arduino IDE writes its own
+    output into a build/ folder inside the sketch; that isn't ours to check."""
+    cmp = filecmp.dircmp(a, b, ignore=["build"])
     if cmp.left_only or cmp.right_only or cmp.diff_files or cmp.funny_files:
         return False
     # dircmp compares by stat signature; recheck file contents

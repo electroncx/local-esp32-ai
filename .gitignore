@@ -6,3 +6,4 @@ firmware/.pio/
 data/wikidata_cache/
 data/large/
 *.answers
+arduino/*/build/
