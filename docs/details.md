@@ -211,6 +211,7 @@ The honest takeaway: **on survival questions worded in a way it hasn't seen, exp
 
 ### Verified on ESP32 firmware
 
+- **The Arduino IDE sketch** (`arduino/local_esp32_ai/`) is built in CI by `arduino-cli`, the Arduino IDE's own build system, with the settings the usage guide gives (ESP32 Dev Module, Partition Scheme Custom, esp32 core 3.3.12), and run in the emulator like the PlatformIO build. Its `build_opt.h` carries `-ffp-contract=off`, so it computes the same floats as the PC.
 - **Builds** with PlatformIO (`espressif32` 7.1.3, pinned) for all three chips with no warnings:
 
   | Board | Flash used (of the 3.9 MB app partition) | Static RAM |
@@ -221,7 +222,7 @@ The honest takeaway: **on survival questions worded in a way it hasn't seen, exp
 
   `esp32dev` flashes in QIO mode at 80 MHz (answers stream weights from flash). `esp32dev-dio` is the same firmware in DIO mode, for boards that won't boot in QIO and for the emulator.
 - **Runs** in Espressif's ESP32 emulator (QEMU) as the real flash image, on both cores: it boots with 235 KB of heap free and gives exactly the PC build's answer to 350 questions (150 test questions and 200 trained facts the model answers itself), so the float math is bit-identical. The ESP32-S3 and ESP32-C3 builds compile but can't be run in this emulator; they use the same engine code and the same IEEE float operations.
-- **Not yet timed on physical hardware.** Emulator timings aren't real. An answer streams the 1.7 MB of 2-bit weights from flash once per block of the question and once per character of the answer, about 19 passes for a typical fact. A rough, unmeasured estimate is a second or two per model answer. Computed answers, stored answers and refusals take milliseconds. To measure on a board, set `SHOW_TIMING 1` in `firmware/src/main.cpp`.
+- **Not yet timed on physical hardware.** Emulator timings aren't real. An answer streams the 1.7 MB of 2-bit weights from flash once per block of the question and once per character of the answer, about 19 passes for a typical fact. A rough, unmeasured estimate is a second or two per model answer. Computed answers, stored answers and refusals take milliseconds. To measure on a board, set `SHOW_TIMING 1` at the top of the sketch.
 
 Re-run the emulator check yourself (needs [Espressif's QEMU](https://github.com/espressif/qemu/releases)):
 
@@ -254,6 +255,9 @@ firmware/lib/tinyai/        inference engine, gate, calculator, units, everyday 
 firmware/src/main.cpp       serial chat for the ESP32
 firmware/partitions.csv     one 3.9 MB app partition for the model
 firmware/qemu_test.py       runs the built firmware in the ESP32 emulator
+firmware/make_arduino.py    builds the Arduino IDE sketch from the firmware and model
+arduino/local_esp32_ai/     the Arduino IDE sketch (generated: engine copy, model as C,
+                            partitions.csv, build_opt.h with the compiler flags)
 host/                       PC build of the same engine
 test.sh                     every check in one command (CI: .github/workflows/ci.yml)
 ```

@@ -29,10 +29,22 @@ def esptool():
     return [sys.executable, "-m", "esptool"]
 
 
+def build_files(build):
+    """Bootloader, partition table and app in a build folder: PlatformIO's
+    names (firmware.bin) or the Arduino IDE's (<sketch>.ino.bin)."""
+    if os.path.exists(os.path.join(build, "firmware.bin")):
+        return [os.path.join(build, n) for n in ("bootloader.bin", "partitions.bin", "firmware.bin")]
+    app = [n for n in os.listdir(build) if n.endswith(".ino.bin")]
+    if len(app) != 1:
+        sys.exit(f"{build}: no firmware.bin or <sketch>.ino.bin")
+    stem = os.path.join(build, app[0][:-4])
+    return [stem + ".bootloader.bin", stem + ".partitions.bin", stem + ".bin"]
+
+
 def merged_flash(build, out):
     """One 4 MB flash image: bootloader, partition table and app, as the chip sees them."""
-    parts = ["0x1000", f"{build}/bootloader.bin", "0x8000", f"{build}/partitions.bin",
-             "0x10000", f"{build}/firmware.bin"]
+    boot, table, app = build_files(build)
+    parts = ["0x1000", boot, "0x8000", table, "0x10000", app]
     tool = esptool() + ["--chip", "esp32"]
     for args in (["merge_bin", "-o", out, "--fill-flash-size", "4MB"],   # esptool 4
                  ["merge-bin", "-o", out, "--pad-to-size", "4MB"]):     # esptool 5
@@ -46,7 +58,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--qemu", default="qemu-system-xtensa")
     # the emulator can't switch flash to QIO, so it runs the DIO build of the same code
-    ap.add_argument("--build", default=os.path.join(HERE, ".pio/build/esp32dev-dio"))
+    ap.add_argument("--build", default=os.path.join(HERE, ".pio/build/esp32dev-dio"),
+                    help="a PlatformIO build folder, or an Arduino IDE export (arduino-cli --output-dir)")
     args = ap.parse_args()
     build = args.build
     questions = [l.rstrip("\n") for l in sys.stdin if l.strip()]

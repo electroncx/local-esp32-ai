@@ -1,0 +1,5 @@
+# One big app slot for a 4 MB flash: the model lives in the app image, so
+# there is no over-the-air update partition and no filesystem.
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x5000
+app0,     app,  factory, 0x10000,  0x3F0000

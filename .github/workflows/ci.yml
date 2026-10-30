@@ -27,6 +27,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0
           curl -sSL "$QEMU_URL" | tar -xJ -C "$RUNNER_TEMP"
+      # The Arduino IDE path, built by arduino-cli (the IDE's own build system)
+      # as the docs tell users to: ESP32 Dev Module, Partition Scheme "Custom".
+      # DIO flash mode only because the emulator can't run QIO.
+      - name: Build the Arduino IDE sketch
+        env:
+          ESP32_INDEX: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$RUNNER_TEMP" sh
+          "$RUNNER_TEMP/arduino-cli" core update-index --additional-urls "$ESP32_INDEX"
+          "$RUNNER_TEMP/arduino-cli" core install esp32:esp32@3.3.12 --additional-urls "$ESP32_INDEX"
+          "$RUNNER_TEMP/arduino-cli" compile --fqbn esp32:esp32:esp32:PartitionScheme=custom,FlashMode=dio \
+            --warnings default --output-dir "$RUNNER_TEMP/arduino-build" arduino/local_esp32_ai
       # engine build, routing, every trained phrasing, the test questions,
-      # all four firmware targets, and the ESP32 firmware in the emulator
-      - run: ./test.sh --qemu "$RUNNER_TEMP/qemu/bin/qemu-system-xtensa"
+      # all four PlatformIO firmware targets, and both the PlatformIO and the
+      # Arduino IDE firmware in the ESP32 emulator
+      - run: ./test.sh --qemu "$RUNNER_TEMP/qemu/bin/qemu-system-xtensa" --arduino "$RUNNER_TEMP/arduino-build"

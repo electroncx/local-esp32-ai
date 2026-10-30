@@ -46,14 +46,19 @@ Anything it doesn't know gets `I don't know.` instead of a guess.
 **First time (once, with a computer):**
 
 1. Download this project: on GitHub click **Code → Download ZIP** and unzip it. No GitHub account needed.
-2. Install [VS Code](https://code.visualstudio.com) and its **PlatformIO** extension.
-3. Plug the ESP32 into the computer with a USB cable.
-4. Open a terminal in the project's `firmware` folder and run `pio run -t upload`. This copies the AI onto the ESP32 (about a minute).
+2. Install the [Arduino IDE](https://www.arduino.cc/en/software). In **Tools → Board → Boards Manager**, search `esp32` and install **esp32 by Espressif Systems** (version 3.x).
+3. In the Arduino IDE, **File → Open** the sketch `arduino/local_esp32_ai/local_esp32_ai.ino` from the unzipped folder.
+4. Set the **Tools** menu:
+   - **Board:** ESP32 Dev Module (ESP32-S3 Dev Module or ESP32C3 Dev Module for those chips)
+   - **Partition Scheme:** **Custom** (the AI needs almost all of the 4 MB flash; the sketch brings its own partition table)
+   - **Flash Size:** 4MB
+   - **Port:** your ESP32, after plugging it in with a USB cable
+5. Click **Upload** (→). The first build takes a few minutes (the AI is 3.6 MB); then it copies onto the ESP32. If the board doesn't start after uploading, set **Tools → Flash Mode** to **DIO** and upload again.
 
 **Every time after that:**
 
 1. Plug the ESP32 into any computer (or a phone with a USB serial app). No internet, no GitHub, no uploading again: the AI lives on the ESP32.
-2. Open a serial terminal at **115200 baud**: `pio device monitor` in the `firmware` folder. The terminal is just a keyboard and screen for the ESP32.
+2. Open **Tools → Serial Monitor** in the Arduino IDE (or any serial terminal) at **115200 baud**, line ending **Newline**. The terminal is just a keyboard and screen for the ESP32.
 3. Wait for `tinyai ready`, type a question, press Enter.
 4. **Keep it short.** `hypothermia` works; `i think my friend has hypothermia what do i do` doesn't.
 5. `I don't know.` means no matching fact: try fewer words, or it doesn't know.
@@ -83,6 +88,7 @@ pip install -r requirements.txt
 python train/train.py --tier max4mb --weights int2 --qat-from 0.5 --steps 15000 \
     --dim 320 --layers 6 --heads 5 --kv-heads 1 --hidden 1024 --out train/ckpt_2.pt
 make -C host && python train/export.py --ckpt train/ckpt_2.pt --max-bytes 3756000
+python firmware/make_arduino.py    # refresh the Arduino IDE sketch
 ./test.sh
 ```
 
