@@ -8,7 +8,6 @@ qemu-xtensa-softmmu build). Prints: question <TAB> answer. Timings in the
 emulator are not real ESP32 timings, so none are printed."""
 
 import argparse
-import glob
 import os
 import select
 import subprocess
@@ -19,12 +18,28 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def esptool():
+    """esptool as PlatformIO installs it (a script up to v4, a program from v5),
+    or as a pip package."""
+    pkgs = os.path.expanduser("~/.platformio/packages")
+    for cmd in ([sys.executable, os.path.join(pkgs, "tool-esptoolpy", "esptool.py")],
+                [os.path.join(pkgs, "tool-esptool", "esptool")]):
+        if os.path.exists(cmd[-1]):
+            return cmd
+    return [sys.executable, "-m", "esptool"]
+
+
 def merged_flash(build, out):
-    esptool = glob.glob(os.path.expanduser("~/.platformio/packages/tool-esptoolpy/esptool.py"))[0]
-    subprocess.run([sys.executable, esptool, "--chip", "esp32", "merge_bin", "-o", out,
-                    "--fill-flash-size", "4MB", "0x1000", f"{build}/bootloader.bin",
-                    "0x8000", f"{build}/partitions.bin", "0x10000", f"{build}/firmware.bin"],
-                   check=True, capture_output=True)
+    """One 4 MB flash image: bootloader, partition table and app, as the chip sees them."""
+    parts = ["0x1000", f"{build}/bootloader.bin", "0x8000", f"{build}/partitions.bin",
+             "0x10000", f"{build}/firmware.bin"]
+    tool = esptool() + ["--chip", "esp32"]
+    for args in (["merge_bin", "-o", out, "--fill-flash-size", "4MB"],   # esptool 4
+                 ["merge-bin", "-o", out, "--pad-to-size", "4MB"]):     # esptool 5
+        r = subprocess.run(tool + args + parts, capture_output=True, text=True)
+        if r.returncode == 0:
+            return
+    sys.exit(f"esptool could not merge the flash image:\n{r.stdout}{r.stderr}")
 
 
 def main():

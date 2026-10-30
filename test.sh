@@ -58,6 +58,8 @@ pc = subprocess.run(["host/tinyai", "firmware/data/model.bin"], input="\n".join(
 out = subprocess.run([sys.executable, "firmware/qemu_test.py", "--qemu", qemu],
                      input="\n".join(q for q, _ in rows) + "\n", capture_output=True, text=True)
 print(out.stderr.strip())
+if out.returncode:
+    sys.exit(f"the emulator run failed (exit {out.returncode}): see above")
 got = [l.split("\t", 1)[1] if "\t" in l else "" for l in out.stdout.split("\n")[:len(rows)]]
 diff = [(q, p, g) for (q, _), p, g in zip(rows, pc, got) if p != g]
 print(f"emulator matches the PC build on {len(rows) - len(diff)}/{len(rows)} questions")
