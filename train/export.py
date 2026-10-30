@@ -2,6 +2,11 @@
 
     python train/export.py
 
+    python train/export.py --from-bin firmware/data/model.bin   # same weights,
+                                   # rebuilt index, keys and errata (no checkpoint
+                                   # or torch needed: after editing phrasings, or
+                                   # when the file layout changes)
+
 Writes:
     firmware/data/model.bin        the model; the host build loads it and the firmware
                                    embeds it in flash (firmware/embed_model.py)
@@ -10,7 +15,7 @@ Writes:
 
 File layout, version 4 (int4 weights), 5 (ternary) or 6 (int2), little endian,
 every block padded to 4 bytes:
-    u32 magic "TAI2", version, vocab, ctx, dim, layers, heads, kv_heads,
+    u32 magic "TAI3", version, vocab, ctx, dim, layers, heads, kv_heads,
         hidden, n_facts, n_known
     tok, pos      int8 [rows*cols] + f32 [rows] scales
     per layer:    n1 f32[dim], wq wk wv wo, n2 f32[dim], w1 w2 (quantized)
@@ -23,10 +28,12 @@ every block padded to 4 bytes:
                   in base 3, first in the lowest digit, stored +1; then
                   f16 [rows] scales
     norm          f32[dim]
-    gate index    see train/gate_index.py: word dictionary, phrasings grouped
-                  by fact (u8 count per fact), per phrasing its question type
-                  (+0x80: every word must match; +0x40: one extra question
-                  word is allowed), word count, length and word ids
+    gate index    see train/gate_index.py: word dictionary (u32 base per 256
+                  words + u16 offsets), phrasings grouped by fact (u8 count per
+                  fact), per phrasing its question type (+0x80: every word must
+                  match; +0x40: one extra question word is allowed) and length,
+                  then all phrasings' word ids in a row (+0x8000 on each
+                  phrasing's last; 0xFFFF for a phrasing with no words)
     keys          each fact's canonical key (shortest phrasing), coded: u32
                   n_extra, u16 offsets and a u32-sized blob of extra words, then
                   u32 bytes of codes (see encode_keys)
@@ -38,17 +45,22 @@ every block padded to 4 bytes:
 """
 
 import argparse
+import hashlib
 import os
 import struct
 import sys
 
-import numpy as np
-import torch
+try:  # not needed with --from-bin
+    import numpy as np
+    import torch
+
+    from model import GROUP, quantize_int2, quantize_int4, quantize_ternary
+except ImportError:
+    torch = None
 
 import engine
 import gate_index
-from common import canonical, load_facts, normalize
-from model import GROUP, quantize_int2, quantize_int4, quantize_ternary
+from common import canonical, load_facts, normalize, tier_of
 
 
 def pad4(b):
@@ -225,11 +237,88 @@ def write(args, data, dropped):
         f.write("};\n")
 
 
+MAGIC = 0x33494154  # "TAI3"
+VERSIONS = {"int4": 4, "ternary": 5, "int2": 6}
+GROUP_ = 32  # weights per scale (model.GROUP), without importing torch
+
+
+def quantized_weights(c, sd):
+    """(file version, bytes of everything from tok to norm) for a checkpoint."""
+    kind = c.get("weights", "int4")
+    qw = {"int4": q4, "ternary": qt, "int2": q2}[kind]
+    out = [q8(sd["tok.weight"]), q8(sd["pos.weight"])]
+    for l in range(c["layers"]):
+        p = f"blocks.{l}."
+        out.append(f32(sd[p + "n1.w"]))
+        out += [qw(sd[p + n + ".weight"]) for n in ("wq", "wk", "wv", "wo")]
+        out.append(f32(sd[p + "n2.w"]))
+        out += [qw(sd[p + n + ".weight"]) for n in ("w1", "w2")]
+    out.append(f32(sd["norm.w"]))
+    return VERSIONS[kind], b"".join(out)
+
+
+def weights_from_bin(path):
+    """(version, cfg, weight bytes, parameter count) of an exported model file,
+    of this or the previous ("TAI2") layout: the weights are the same."""
+    data = open(path, "rb").read()
+    magic, version, vocab, ctx, dim, layers, heads, kv_heads, hidden = struct.unpack("<9I", data[:36])
+    if magic not in (MAGIC, 0x32494154) or version not in VERSIONS.values():
+        sys.exit(f"{path}: not a model file")
+
+    def p4(n):
+        return -(-n // 4) * 4
+
+    def q(rows, cols):  # one quantized matrix, as q4 / q2 / qt write it
+        if version == 6:
+            return p4(rows * cols // 4) + p4(rows * cols // GROUP_ * 2)
+        if version == 5:
+            return p4(rows * -(-cols // 5)) + p4(rows * 2)
+        return p4(rows * cols // 2) + p4(rows * cols // GROUP_ * 2)
+
+    kv = kv_heads * (dim // heads)
+    size = (p4(vocab * dim) + 4 * vocab + p4(ctx * dim) + 4 * ctx + 4 * dim +
+            layers * (8 * dim + 2 * q(dim, dim) + 2 * q(kv, dim) + q(hidden, dim) + q(dim, hidden)))
+    c = dict(vocab=vocab, ctx=ctx, dim=dim, layers=layers, heads=heads, kv_heads=kv_heads, hidden=hidden)
+    n_params = (vocab + ctx) * dim + layers * (2 * dim + 2 * dim * dim + 2 * kv * dim + 2 * hidden * dim) + dim
+    return version, c, data[44:44 + size], n_params
+
+
+def model_answers(args, keys, weights, batch=2000):
+    """The model's own answer to each key (the file at args.bin has no errata
+    yet). Saved as it goes in <bin>.answers, keyed by a hash of the weights and
+    the engine's code, so an interrupted export resumes and a re-export with
+    the same weights (new phrasings, a new file layout) runs no model at all."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    engine_src = open(os.path.join(here, "..", "firmware", "lib", "tinyai", "tinyai.c"), "rb").read()
+    tag = hashlib.sha1(weights + engine_src).hexdigest()
+    path = os.path.splitext(args.bin)[0] + ".answers"
+    cache = {}
+    if os.path.exists(path):
+        lines = open(path, encoding="utf-8").read().split("\n")
+        if lines[0] == tag:
+            cache = dict(l.split("\t", 1) for l in lines[1:] if "\t" in l)
+    if not cache:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(tag + "\n")
+    todo = [k for k in dict.fromkeys(keys) if k not in cache]
+    print(f"model answers: {len(keys) - len(todo)} cached, {len(todo)} to run", flush=True)
+    for i in range(0, len(todo), batch):
+        part = todo[i:i + batch]
+        got = ask(args.host, args.bin, part)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("".join(f"{k}\t{g}\n" for k, g in zip(part, got)))
+        cache.update(zip(part, got))
+        print(f"  {min(i + batch, len(todo))}/{len(todo)}", flush=True)
+    return [cache[k] for k in keys]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tier", default=None, choices=["small", "max4mb", "large"],
                     help="fact set the checkpoint was trained on (default: recorded in it by train.py)")
     ap.add_argument("--ckpt", default="train/ckpt.pt")
+    ap.add_argument("--from-bin", default=None,
+                    help="take the weights from this model file instead of a checkpoint")
     ap.add_argument("--bin", default="firmware/data/model.bin")
     ap.add_argument("--header", default=None, help="also write the model as a C array (optional; the firmware embeds the .bin)")
     ap.add_argument("--host", default="host/tinyai", help="C engine used to find errata")
@@ -238,13 +327,21 @@ def main():
                     help="size limit: facts the model gets wrong that don't fit as errata are refused")
     args = ap.parse_args()
 
-    ck = torch.load(args.ckpt, map_location="cpu")
-    c, sd = ck["cfg"], ck["model"]
-    if args.tier and ck.get("tier") and args.tier != ck["tier"]:
-        sys.exit(f"{args.ckpt} was trained on tier {ck['tier']!r}, not {args.tier!r}")
-    args.tier = args.tier or ck.get("tier")
-    if not args.tier:
-        sys.exit(f"{args.ckpt} does not record its tier (older train.py): pass --tier")
+    if args.from_bin:
+        version, c, weights, n_params = weights_from_bin(args.from_bin)
+        args.tier = args.tier or tier_of(args.from_bin)
+    else:
+        if torch is None:
+            sys.exit("exporting a checkpoint needs torch and numpy (pip install -r requirements.txt)")
+        ck = torch.load(args.ckpt, map_location="cpu")
+        c, sd = ck["cfg"], ck["model"]
+        if args.tier and ck.get("tier") and args.tier != ck["tier"]:
+            sys.exit(f"{args.ckpt} was trained on tier {ck['tier']!r}, not {args.tier!r}")
+        args.tier = args.tier or ck.get("tier")
+        if not args.tier:
+            sys.exit(f"{args.ckpt} does not record its tier (older train.py): pass --tier")
+        version, weights = quantized_weights(c, sd)
+        n_params = sum(v.numel() for v in sd.values())
     strict, lenient = set(), set()
     facts = load_facts(args.tier, strict=strict, lenient=lenient)
     keys = [canonical(qs) for qs, _ in facts]
@@ -254,18 +351,8 @@ def main():
             known.setdefault(normalize(q), i)  # first fact wins a shared phrasing
     assert len(facts) < 65536
 
-    kind = c.get("weights", "int4")
-    qw, version = {"int4": (q4, 4), "ternary": (qt, 5), "int2": (q2, 6)}[kind]
-    out = [struct.pack("<11I", 0x32494154, version, c["vocab"], c["ctx"], c["dim"], c["layers"],
-                       c["heads"], c["kv_heads"], c["hidden"], len(facts), len(known)),
-           q8(sd["tok.weight"]), q8(sd["pos.weight"])]
-    for l in range(c["layers"]):
-        p = f"blocks.{l}."
-        out.append(f32(sd[p + "n1.w"]))
-        out += [qw(sd[p + n + ".weight"]) for n in ("wq", "wk", "wv", "wo")]
-        out.append(f32(sd[p + "n2.w"]))
-        out += [qw(sd[p + n + ".weight"]) for n in ("w1", "w2")]
-    out.append(f32(sd["norm.w"]))
+    out = [struct.pack("<11I", MAGIC, version, c["vocab"], c["ctx"], c["dim"], c["layers"],
+                       c["heads"], c["kv_heads"], c["hidden"], len(facts), len(known)), weights]
     index, wid = gate_index.build(list(known.items()), len(facts), strict, lenient)
     out.append(index)
     n_words = len(wid)
@@ -289,7 +376,7 @@ def main():
         astray = [(k, r) for k, r, (_, a) in zip(keys, routes, facts) if r != k and r != "=" + a]
         assert not astray, f"keys that don't reach their own fact: {astray[:5]}"
         # the real C engine answers every fact's key, exactly as on the device
-        got = ask(args.host, args.bin, keys)
+        got = model_answers(args, keys, weights)
         wrong = [(i, a) for i, ((_, a), g) in enumerate(zip(facts, got)) if g != a]
         fixes = fit(wrong, strict, assemble, args.max_bytes)
         if fixes:
@@ -306,7 +393,6 @@ def main():
             print(f"    {keys[i]!r} -> {got[i]!r}, {'stored ' + repr(a) if a else 'refused'}")
     if args.max_bytes and len(data) > args.max_bytes:
         sys.exit(f"{len(data):,} bytes, over --max-bytes {args.max_bytes:,}")
-    n_params = sum(v.numel() for v in sd.values())
     print(f"{n_params:,} params -> {len(data):,} bytes ({8 * len(data) / n_params:.2f} bits/param "
           f"incl. text), {len(facts)} facts, {len(known)} phrasings, {n_words} indexed words, "
           f"gate index {len(index):,} bytes")

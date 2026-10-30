@@ -51,6 +51,8 @@ def main():
     ap.add_argument("--bin", default="host/tinyai")
     ap.add_argument("--model", default="firmware/data/model.bin")
     ap.add_argument("--eval", nargs="*", default=None, help="default: the tier's eval files")
+    ap.add_argument("--part", default="0/1",
+                    help="K/N: check only the Kth of N slices of the facts' answers (to split a long run)")
     ap.add_argument("--min-heldout", type=float, default=0.0,
                     help="exit 1 if held-out accuracy falls below this")
     args = ap.parse_args()
@@ -75,9 +77,15 @@ def main():
     # each distinct key. Same result as asking every phrasing, 4x faster.
     routes = run(args.bin, args.model, [q for q, _ in pairs], "--gate")
     keys = sorted({r for r in routes if r != "-" and not r.startswith("=")})
+    # --part K/N: only every Nth key from the Kth (the model is the slow part);
+    # computed and refused answers are checked in part 0.
+    part, parts = map(int, args.part.split("/"))
+    keys = keys[part::parts]
     answer = dict(zip(keys, run(args.bin, args.model, keys)))
-    got = [r[1:] if r.startswith("=") else "I don't know." if r == "-" else answer[r] for r in routes]
-    t_ok, _, _ = report("trained questions", [(q, a, g) for (q, a), g in zip(pairs, got)])
+    rows = [(q, a, r[1:] if r.startswith("=") else "I don't know." if r == "-" else answer[r])
+            for (q, a), r in zip(pairs, routes) if r in answer or (part == 0 and (r == "-" or r.startswith("=")))]
+    got = [g for _, _, g in rows]
+    t_ok, _, _ = report("trained questions" + (f" (part {part + 1} of {parts})" if parts > 1 else ""), rows)
 
     # Eval questions that are also trained phrasings (after normalizing) only
     # check consistency; the held-out score counts the rest, never trained on.
@@ -96,7 +104,7 @@ def main():
         print(f"    {g!r}")
     # Pass: every trained phrasing exact, no wrong held-out answer (declining is
     # allowed: "I don't know." is the safe failure), direct answers, C == Python.
-    if bad or drift or t_ok < len(pairs) or wrong or seen_wrong or ok / len(held) < args.min_heldout:
+    if bad or drift or t_ok < len(rows) or wrong or seen_wrong or ok / len(held) < args.min_heldout:
         sys.exit(1)
 
 

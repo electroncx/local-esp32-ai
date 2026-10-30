@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define TAI_MAGIC 0x32494154u  // "TAI2"
+#define TAI_MAGIC 0x33494154u  // "TAI3"
 #define TAI_VERSION 4          // int4 weights
 #define TAI_VERSION_TERNARY 5  // ternary weights (-1, 0, +1), 1.6 bits each
 #define TAI_VERSION_INT2 6     // int2 weights (-1.5, -0.5, 0.5, 1.5), 2.5 bits each
@@ -62,13 +62,16 @@ typedef struct {
     // Gate index (see train/gate_index.py): a sorted dictionary of content
     // words, and every accepted phrasing, grouped by fact (fact_count per
     // fact), with its question type (bit 7: every word must match; bit 6:
-    // one extra question word is allowed), length and content-word ids.
+    // one extra question word is allowed), length and content-word ids. The
+    // ids of all phrasings run together: bit 15 marks a phrasing's last
+    // word, and TAI_NO_WORDS stands for a phrasing with none (small talk).
     int n_words, n_known;
     const char *words;
-    const uint32_t *word_off;
+    const uint32_t *word_page;  // word i is at words + word_page[i >> 8] + word_off[i]
+    const uint16_t *word_off;
     const uint8_t *word_len;
     const uint8_t *fact_count;
-    const uint8_t *known_qtype, *known_nwords, *known_len;
+    const uint8_t *known_qtype, *known_len;
     const uint16_t *known_words;
     const char *small_talk;  // text of phrasings with no content words
     // Each fact's canonical question (the model's prompt), coded with the
@@ -77,8 +80,8 @@ typedef struct {
     const uint16_t *extra_off;
     const char *extras;
     const uint8_t *keys;
-    // Errata: the few facts the int4 model answers wrong, stored as text
-    // (found by train/export.py running this engine on every fact).
+    // Errata: facts the model answers wrong, stored as text (found by
+    // train/export.py running this engine on every fact); "" = refused.
     int n_errata;
     const uint16_t *errata_fact;  // sorted fact indices
     const char *errata;           // their answers, in the same order
@@ -102,6 +105,13 @@ void tai_set_parallel(tai_model *m, tai_parallel_fn fn);
 // short, direct answer to `out`. Returns 0 = model, 1 = calculator,
 // 2 = refused (unknown topic).
 int tai_ask(tai_model *m, const char *question, char *out, int out_len);
+
+#define TAI_NO_WORDS 0xFFFFu  // in known_words: a phrasing with no content words
+
+// Word i of the gate dictionary.
+static inline const char *tai_word(const tai_model *m, int i) {
+    return m->words + m->word_page[i >> 8] + m->word_off[i];
+}
 
 // The stored answer for fact i (0-based) if it is on the errata list, else
 // NULL. "" = a fact the model gets wrong that is refused instead.

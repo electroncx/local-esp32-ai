@@ -26,7 +26,7 @@ STOP = {
     "much", "many", "there", "it", "its", "that", "this", "we", "my", "have", "has", "called",
     "just", "like", "um", "uh", "hmm", "now", "actually", "really", "some", "any", "all",
     "should", "need", "needs", "must", "supposed", "ought", "make", "makes", "whens", "wheres",
-    "hows", "whys", "gonna", "wanna", "take", "takes", "once", "after", "if", "am", "using",
+    "hows", "whys", "gonna", "wanna", "take", "takes", "once", "after", "if", "am", "using", "help",
 }
 SYNONYMS = {
     "begin": "start", "began": "start", "begins": "start", "started": "start", "starts": "start",
@@ -98,6 +98,10 @@ STRICT = 0x80   # every word of this phrasing must be in the question (names)
 LENIENT = 0x40  # the question may add one word of context (advice)
 
 
+NO_WORDS = 0xFFFF  # a phrasing with no content words (small talk)
+END = 0x8000       # on a word id: the last word of its phrasing
+
+
 def build(known, n_facts, strict=(), lenient=()):
     """known: [(normalized phrasing, fact index)] -> (index bytes, {word: id}); see the
     file layout in export.py. Phrasings of facts in `strict` / `lenient` get that flag
@@ -109,14 +113,22 @@ def build(known, n_facts, strict=(), lenient=()):
     vocab = sorted({w for words, *_ in parsed for w in words})
     advice = {w for words, t, *_ in parsed if t & LENIENT for w in words}
     wid = {w: i for i, w in enumerate(vocab)}
-    assert len(vocab) < 65536
+    assert len(vocab) < 0x7FFF, "word ids are 15 bits"
+    assert max(len(words) for words, *_ in parsed) <= MAX_WORDS
 
     blob = "\0".join(vocab).encode() + b"\0"
-    offsets, off = [], 0
+    # word i starts at page[i >> 8] + off[i]: u16 offsets, a u32 base per 256 words
+    starts, o = [], 0
     for w in vocab:
-        offsets.append(off)
-        off += len(w) + 1
-    ids = [wid[w] for words, *_ in parsed for w in words]
+        starts.append(o)
+        o += len(w) + 1
+    pages = [starts[i] for i in range(0, len(vocab), 256)]
+    offs = [st - pages[i >> 8] for i, st in enumerate(starts)]
+    assert max(offs) < 65536
+    # every phrasing's ids in a row; the last of each carries END
+    ids = []
+    for words, *_ in parsed:
+        ids += [wid[w] for w in words[:-1]] + [wid[words[-1]] | END] if words else [NO_WORDS]
     counts = [0] * n_facts
     for *_, f, _ in parsed:
         counts[f] += 1
@@ -124,12 +136,11 @@ def build(known, n_facts, strict=(), lenient=()):
     small_talk = "\0".join(q for words, _, _, _, q in parsed if not words).encode() + b"\0"
 
     out = [struct.pack("<II", len(vocab), len(blob)), _pad4(blob),
-           struct.pack(f"<{len(vocab)}I", *offsets),
+           struct.pack(f"<{len(pages)}I", *pages), _pad4(struct.pack(f"<{len(offs)}H", *offs)),
            # length, +0x80 if the word is in a lenient phrasing (see gate.c)
            _pad4(bytes(len(w) | (0x80 if w in advice else 0) for w in vocab)),
            _pad4(bytes(counts)),
            _pad4(bytes(t for _, t, _, _, _ in parsed)),
-           _pad4(bytes(len(words) for words, *_ in parsed)),
            _pad4(bytes(min(n, 255) for _, _, n, _, _ in parsed)),
            struct.pack("<I", len(ids)), _pad4(struct.pack(f"<{len(ids)}H", *ids)),
            struct.pack("<I", len(small_talk)), _pad4(small_talk)]

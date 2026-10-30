@@ -60,7 +60,7 @@ int tai_fact(const tai_model *m, int i, char *out, int out_len) {
         }
         int id = (*c & 0x7F) << 8 | c[1];
         c++;
-        const char *w = id < m->n_words ? m->words + m->word_off[id] : m->extras + m->extra_off[id - m->n_words];
+        const char *w = id < m->n_words ? tai_word(m, id) : m->extras + m->extra_off[id - m->n_words];
         if (n && n < out_len - 1) out[n++] = ' ';
         while (*w && n < out_len - 1) out[n++] = *w++;
     }
@@ -137,17 +137,26 @@ static int consistent(const tai_model *m, uint32_t words_len, uint32_t extras_le
     int n_codes = m->n_words + m->n_extra;
     if (n_codes > 32768) return 0;
     for (int i = 0; i < m->n_words; i++)
-        if (m->word_off[i] >= words_len || !(m->word_len[i] & 0x7f)) return 0;
+        if ((uint64_t)m->word_page[i >> 8] + m->word_off[i] >= words_len || !(m->word_len[i] & 0x7f)) return 0;
     for (int i = 0; i < m->n_extra; i++)
         if (m->extra_off[i] >= extras_len) return 0;
     long sum = 0;
     for (int i = 0; i < m->n_facts; i++) sum += m->fact_count[i];
     if (sum != m->n_known) return 0;
-    sum = 0;
-    for (int i = 0; i < m->n_known; i++) sum += m->known_nwords[i];
-    if (sum != (long)n_ids) return 0;
-    for (uint32_t i = 0; i < n_ids; i++)
-        if (m->known_words[i] >= m->n_words) return 0;
+    // n_known phrasings, each 1..16 ids ending in one with bit 15, or TAI_NO_WORDS
+    long phrasings = 0;
+    for (uint32_t i = 0, len = 0; i < n_ids; i++) {
+        uint16_t id = m->known_words[i];
+        if (id == TAI_NO_WORDS) {
+            if (len) return 0;
+            phrasings++;
+            continue;
+        }
+        if ((id & 0x7FFF) >= m->n_words || ++len > 16) return 0;
+        if (id & 0x8000) phrasings++, len = 0;
+        else if (i + 1 == n_ids) return 0;  // the last phrasing never ends
+    }
+    if (phrasings != m->n_known) return 0;
     int keys = 0;
     for (uint32_t i = 0; i < keys_len; i++) {
         uint8_t c = (uint8_t)m->keys[i];
@@ -216,19 +225,19 @@ static int load(tai_model *m, const uint8_t *blob, size_t len) {
     m->norm = (const float *)take(&r, (size_t)D * 4);
     const uint32_t *nw = (const uint32_t *)take(&r, 4);
     if (!m->norm || !nw) return -1;
-    if (*nw > 32768) return -1;
+    if (*nw >= 32767) return -1;  // ids are 15 bits, and 0x7FFF is taken
     m->n_words = (int)*nw;
     uint32_t words_len = 0, extras_len = 0, keys_len = 0, errata_len = 0, talk_len = 0;
     m->words = take_strings(&r, &words_len);
-    m->word_off = (const uint32_t *)take(&r, (size_t)m->n_words * 4);
+    m->word_page = (const uint32_t *)take(&r, (size_t)(m->n_words + 255) / 256 * 4);
+    m->word_off = (const uint16_t *)take(&r, (size_t)m->n_words * 2);
     m->word_len = (const uint8_t *)take(&r, (size_t)m->n_words);
     m->fact_count = (const uint8_t *)take(&r, (size_t)m->n_facts);
     m->known_qtype = (const uint8_t *)take(&r, (size_t)m->n_known);
-    m->known_nwords = (const uint8_t *)take(&r, (size_t)m->n_known);
     m->known_len = (const uint8_t *)take(&r, (size_t)m->n_known);
     const uint32_t *n_ids = (const uint32_t *)take(&r, 4);
-    if (!m->words || !m->word_off || !m->word_len || !m->fact_count || !m->known_qtype ||
-        !m->known_nwords || !m->known_len || !n_ids)
+    if (!m->words || !m->word_page || !m->word_off || !m->word_len || !m->fact_count ||
+        !m->known_qtype || !m->known_len || !n_ids)
         return -1;
     if (*n_ids > (1u << 26)) return -1;
     m->known_words = (const uint16_t *)take(&r, (size_t)*n_ids * 2);

@@ -27,7 +27,7 @@ static const char *const STOP[] = {
     "much", "many", "there", "it", "its", "that", "this", "we", "my", "have", "has", "called",
     "just", "like", "um", "uh", "hmm", "now", "actually", "really", "some", "any", "all",
     "should", "need", "needs", "must", "supposed", "ought", "make", "makes", "whens", "wheres",
-    "hows", "whys", "gonna", "wanna", "take", "takes", "once", "after", "if", "am", "using",
+    "hows", "whys", "gonna", "wanna", "take", "takes", "once", "after", "if", "am", "using", "help",
 };
 
 // Words that add context but never change which fact is meant
@@ -170,7 +170,7 @@ typedef struct {
 static int find_word(const tai_model *m, const char *w) {  // binary search, -1 if absent
     int lo = 0, hi = m->n_words - 1;
     while (lo <= hi) {
-        int mid = (lo + hi) / 2, c = strcmp(w, m->words + m->word_off[mid]);
+        int mid = (lo + hi) / 2, c = strcmp(w, tai_word(m, mid));
         if (!c) return mid;
         if (c < 0) hi = mid - 1;
         else lo = mid + 1;
@@ -213,7 +213,7 @@ static void lookup(const tai_model *m, const char *w, hits *out) {
     for (int i = 0; i < m->n_words && out->n < MAX_HITS; i++) {
         int d = lw - (m->word_len[i] & 0x7f);
         if (d > 2 || d < -2) continue;  // no fuzzy match spans more than 2 letters
-        const char *k = m->words + m->word_off[i];
+        const char *k = tai_word(m, i);
         if (strcmp(w, k) && word_match(w, k)) out->h[out->n++] = (hit){(uint16_t)i, 1};
     }
 }
@@ -330,6 +330,13 @@ int tai_gate(const tai_model *m, const char *norm) {
     int wordy = 0;
     for (int i = 0; i < n; i++)
         for (const char *c = in[i]; *c; c++) wordy |= *c >= 'a' && *c <= 'z';
+    // Who it's for ("my *friend* fainted"): advice that names it must match
+    // in full, or "friend fainted from heat" would answer it with one word
+    // ("heat") missing.
+    int named = 0;
+    for (int i = 0; i < n; i++)
+        named |= in_list(in[i], QUALIFIERS, sizeof QUALIFIERS / sizeof *QUALIFIERS) && strcmp(in[i], "not") &&
+                 strcmp(in[i], "without") && strcmp(in[i], "never");
     // One dictionary lookup per input word, and per adjacent pair joined
     // ("humming bird" -> "hummingbird"). Static: too big for a small stack.
     static hits word[MAX_WORDS], joined[MAX_WORDS];
@@ -372,9 +379,13 @@ int tai_gate(const tai_model *m, const char *norm) {
     for (int p = 0; p < m->n_known; p++) {
         while (left == 0 && f + 1 < m->n_facts) left = m->fact_count[++f];
         left--;
-        int nk = m->known_nwords[p];
-        const uint16_t *k = ids;
-        ids += nk;
+        // this phrasing's word ids, up to the one with the end bit
+        uint16_t k[MAX_WORDS];
+        int nk = 0;
+        if (*ids == TAI_NO_WORDS) ids++;
+        else
+            do k[nk++] = *ids & 0x7FFF;
+            while (!(*ids++ & 0x8000));
         const char *text = NULL;
         if (nk == 0) {
             text = talk;
@@ -446,7 +457,7 @@ int tai_gate(const tai_model *m, const char *norm) {
             }
             // A strict phrasing names something ("michelle obama"): all of it
             // must be in the question, or "obama" alone would reach it.
-            if (2 * b_matched < nk || ((cross || strict || !wordy) && b_matched < nk)) continue;
+            if (2 * b_matched < nk || ((cross || strict || !wordy || named) && b_matched < nk)) continue;
             // ...and only when every word of a 2+ word phrasing is there, so
             // the extra word is context, not a different subject.
             if (extra && (b_matched < nk || nk < 2)) continue;
