@@ -128,7 +128,7 @@ v2 is still one command away (`python train/train.py`, then `export.py --tier sm
 - **Bit-identical on every chip.** Errata are found on a PC, so the ESP32 must compute exactly the same floats, or a fact that is right on the PC could come out wrong on the board. The first 2-bit build disagreed with the PC on 3 of 350 emulator questions ("biggest planet in the solar system" → "Johnumber, Pope."). The ESP32's FPU fuses multiply-adds, and its libm's `expf`/`tanhf`/`sqrtf` differ from a PC's. Inference now uses only +, −, × and int↔float conversions, which IEEE 754 rounds identically everywhere, with its own exp, reciprocal and inverse square root. Both builds use `-ffp-contract=off`. After the fix: 400/400 identical, including those 3.
 - **Grouped-query attention** halves the K/V projections and the KV cache.
 - **Both cores.** On the ESP32 and ESP32-S3 each matmul is split across the two cores with FreeRTOS task notifications. Output rows are independent, so answers are bit-identical to single-core.
-- **One big app partition.** `firmware/partitions.csv` gives the app 3.9 MB of a 4 MB flash (no OTA). The firmware fills 99.5% of it.
+- **One big app partition.** `firmware/partitions.csv` gives the app 3.9 MB of a 4 MB flash (no OTA). The firmware fills 98.1% of it.
 
 ### Knowledge from real sources
 - **Wikidata, filtered for reliability.** `data/wikidata_facts.py` queries Wikidata (public domain, CC0) through [QLever](https://qlever.dev) and keeps the best-known items by how many Wikipedias cover them: 4,800 people, 2,500 cities, every country, presidents, mountains, rivers, landmarks, books, films, songs, albums, paintings, companies, universities, wars and battles, compounds, species and programming languages. What it throws away matters as much:
@@ -210,13 +210,13 @@ The honest takeaway: **on survival questions worded in a way it hasn't seen, exp
 
 ### Verified on ESP32 firmware
 
-- **Builds** with PlatformIO for all three chips with no warnings:
+- **Builds** with PlatformIO (`espressif32` 7.1.3, pinned) for all three chips with no warnings:
 
   | Board | Flash used (of the 3.9 MB app partition) | Static RAM |
   |---|---|---|
-  | ESP32 | 4,011 KB (99.5%) | 34.1 KB |
-  | ESP32-S3 | 4,008 KB (99.4%) | 31.2 KB |
-  | ESP32-C3 | 3,993 KB (99.0%) | 26.6 KB |
+  | ESP32 | 3,957 KB (98.1%) | 34.1 KB |
+  | ESP32-S3 | 3,953 KB (98.0%) | 31.2 KB |
+  | ESP32-C3 | 3,939 KB (97.7%) | 26.6 KB |
 
   `esp32dev` flashes in QIO mode at 80 MHz (answers stream weights from flash). `esp32dev-dio` is the same firmware in DIO mode, for boards that won't boot in QIO and for the emulator.
 - **Runs** in Espressif's ESP32 emulator (QEMU) as the real flash image, on both cores: it boots with 235 KB of heap free and gives exactly the PC build's answer to 350 questions (150 test questions and 200 trained facts the model answers itself), so the float math is bit-identical. The ESP32-S3 and ESP32-C3 builds compile but can't be run in this emulator; they use the same engine code and the same IEEE float operations.
