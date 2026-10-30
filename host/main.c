@@ -8,6 +8,8 @@
 //   ./host/tinyai firmware/data/model.bin --route       # 0 model, 1 computed, 2 refused
 //   ./host/tinyai firmware/data/model.bin --words       # how the gate parses each line
 //   ./host/tinyai firmware/data/model.bin --gate        # routing only: computed answer, fact key, or "-"
+//   ./host/tinyai firmware/data/model.bin --block 1     # question characters per model pass
+//                                                       # (default 65: the whole question)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,10 +22,10 @@
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s model.bin [--raw] [--time] [--why] [--route] [--words] [--gate]\n", argv[0]);
+        fprintf(stderr, "usage: %s model.bin [--raw] [--time] [--why] [--route] [--words] [--gate] [--block N]\n", argv[0]);
         return 1;
     }
-    int raw = 0, timing = 0, why = 0, route = 0, words = 0, gate = 0;
+    int raw = 0, timing = 0, why = 0, route = 0, words = 0, gate = 0, block = TAI_MAX_Q + 1;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--raw")) raw = 1;
         if (!strcmp(argv[i], "--time")) timing = 1;
@@ -31,6 +33,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--route")) route = 1;
         if (!strcmp(argv[i], "--words")) words = 1;
         if (!strcmp(argv[i], "--gate")) gate = 1;
+        if (!strcmp(argv[i], "--block") && i + 1 < argc) block = atoi(argv[++i]);
     }
     FILE *f = fopen(argv[1], "rb");
     if (!f) {
@@ -54,6 +57,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "load failed: %d\n", rc);
         return 1;
     }
+    tai_set_block(&m, block);
     int tty = 0;
 #ifdef __unix__
     tty = isatty(0);

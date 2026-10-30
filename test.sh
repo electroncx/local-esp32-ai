@@ -34,6 +34,24 @@ python3 train/check_routing.py --show 20
 step "answers on the C engine: trained phrasings, held-out questions, directness"
 python3 train/evaluate.py
 
+step "questions run through the model in blocks: same answers as one character at a time"
+python3 - <<'EOF'
+import random, sys
+sys.path.insert(0, "train")
+import engine
+from common import DEFAULT_TIER, canonical, dropped_of, load_facts
+dropped = dropped_of("firmware/data/model.bin")
+keys = random.Random(3).sample([canonical(qs) for qs, _ in load_facts(DEFAULT_TIER)
+                                if canonical(qs) not in dropped], 300)
+one = engine.ask("host/tinyai", "firmware/data/model.bin", keys, "--raw", "--block", "1")
+for b in ("5", "65"):
+    got = engine.ask("host/tinyai", "firmware/data/model.bin", keys, "--raw", "--block", b)
+    same = sum(x == y for x, y in zip(one, got))
+    print(f"block {b}: {same}/{len(keys)} identical to block 1")
+    if same < len(keys):
+        sys.exit(1)
+EOF
+
 if [ "$firmware" = 1 ]; then
   step "firmware builds"
   (cd firmware && pio run -e esp32dev -e esp32dev-dio -e esp32-s3 -e esp32-c3)

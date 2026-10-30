@@ -61,9 +61,23 @@ void setup() {
         cores = 2;
     }
 #endif
-    Serial.printf("\ntinyai ready: %d facts, %u KB model, %d cores, %u KB heap free\n",
-                  model.n_facts, model_data_len / 1024, cores,
-                  (unsigned)(ESP.getFreeHeap() / 1024));
+    // Spare RAM makes answers faster: the question's characters go through
+    // the model in blocks, reading each weight row from flash once per block
+    // (same answers, bit for bit). Keep RESERVE free for everything else; the
+    // block's biggest single buffer (dim x 4 bytes per position) must also
+    // fit in the heap's largest free piece.
+    const size_t RESERVE = 48 * 1024;
+    size_t heap = ESP.getFreeHeap(), largest = ESP.getMaxAllocHeap();
+    size_t per = tai_block_bytes(&model), widest = (size_t)model.dim * 4;
+    size_t want = heap > RESERVE + per ? (heap - RESERVE) / per : 1;
+    if (want > largest / widest) want = largest / widest;
+    int block = tai_set_block(&model, want < 1 ? 1 : (int)want);
+    if (!block) {
+        Serial.println("out of memory");
+        for (;;) delay(1000);
+    }
+    Serial.printf("\ntinyai ready: %d facts, %u KB model, %d cores, %d-character blocks, %u KB heap free\n",
+                  model.n_facts, model_data_len / 1024, cores, block, (unsigned)(ESP.getFreeHeap() / 1024));
     Serial.println("Offline survival and everyday answers. It might make a mistake:");
     Serial.println("double-check anything important. In an emergency, call for help first.");
     Serial.print("you: ");

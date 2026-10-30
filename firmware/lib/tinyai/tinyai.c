@@ -257,23 +257,14 @@ static int load(tai_model *m, const uint8_t *blob, size_t len) {
         !consistent(m, words_len, extras_len, keys_len, errata_len, *n_ids))
         return -1;
 
-    int big = H > D ? H : D;
-    m->x = (float *)zalloc((size_t)D * 4);
-    m->xb = (float *)zalloc((size_t)D * 4);
-    m->q = (float *)zalloc((size_t)D * 4);
-    m->k = (float *)zalloc((size_t)KV * 4);
-    m->v = (float *)zalloc((size_t)KV * 4);
-    m->hb = (float *)zalloc((size_t)big * 4);
     m->att = (float *)zalloc((size_t)m->ctx * 4);
     m->logits = (float *)zalloc((size_t)m->vocab * 4);
-    m->xq = (int8_t *)zalloc((size_t)big);
-    m->xsum = (int32_t *)zalloc((size_t)(big / TAI_GROUP + 1) * 4);
+    if (tai_set_block(m, 1) != 1) return -3;
     m->kc = (int8_t **)zalloc(sizeof(int8_t *) * (size_t)m->layers);
     m->vc = (int8_t **)zalloc(sizeof(int8_t *) * (size_t)m->layers);
     m->ks = (float **)zalloc(sizeof(float *) * (size_t)m->layers);
     m->vs = (float **)zalloc(sizeof(float *) * (size_t)m->layers);
-    if (!m->x || !m->xb || !m->q || !m->k || !m->v || !m->hb || !m->att || !m->logits || !m->xq ||
-        !m->xsum || !m->kc || !m->vc || !m->ks || !m->vs)
+    if (!m->att || !m->logits || !m->kc || !m->vc || !m->ks || !m->vs)
         return -3;
     // KV cache is int8 too: one allocation per layer keeps each block small
     // enough for the ESP32's fragmented heap.
@@ -287,6 +278,8 @@ static int load(tai_model *m, const uint8_t *blob, size_t len) {
     return 0;
 }
 
+static void free_block(tai_model *m);
+
 void tai_free(tai_model *m) {
     for (int l = 0; l < m->layers; l++) {  // also after a load that failed halfway
         if (m->kc) free(m->kc[l]);
@@ -295,8 +288,8 @@ void tai_free(tai_model *m) {
         if (m->vs) free(m->vs[l]);
     }
     free(m->kc); free(m->vc); free(m->ks); free(m->vs);
-    free(m->x); free(m->xb); free(m->q); free(m->k); free(m->v);
-    free(m->hb); free(m->att); free(m->logits); free(m->xq); free(m->xsum); free(m->layer);
+    free_block(m);
+    free(m->att); free(m->logits); free(m->layer);
     memset(m, 0, sizeof *m);
 }
 
@@ -384,12 +377,20 @@ static float quantize(int8_t *q, const float *x, int n) {
 
 // Quantizes the matmul input once; the per-group sums let the int4 kernel
 // use unsigned nibbles: sum((w - 8) * x) = sum(w * x) - 8 * sum(x).
-static void set_input(tai_model *m, const float *x, int n) {
-    m->xs = quantize(m->xq, x, n);
-    for (int g = 0; g < n / TAI_GROUP; g++) {
-        int32_t s = 0;
-        for (int i = 0; i < TAI_GROUP; i++) s += m->xq[g * TAI_GROUP + i];
-        m->xsum[g] = s;
+// Positions b < nb: input x + b * n.
+static int widest(const tai_model *m) { return m->hidden > m->dim ? m->hidden : m->dim; }
+
+// Inputs are x + b * n, or rows[b] if rows is given.
+static void set_input(tai_model *m, const float *x, float *const *rows, int n, int nb) {
+    int big = widest(m), gs = big / TAI_GROUP + 1;
+    for (int b = 0; b < nb; b++) {
+        int8_t *xq = m->xq + (size_t)b * big;
+        m->xs[b] = quantize(xq, rows ? rows[b] : x + (size_t)b * n, n);
+        for (int g = 0; g < n / TAI_GROUP; g++) {
+            int32_t s = 0;
+            for (int i = 0; i < TAI_GROUP; i++) s += xq[g * TAI_GROUP + i];
+            m->xsum[(size_t)b * gs + g] = s;
+        }
     }
 }
 
@@ -402,11 +403,19 @@ static void set_input(tai_model *m, const float *x, int n) {
 #define ALIGNED4(p) (p)
 #endif
 
+// o = W x for nb positions: position b reads its input from set_input and
+// writes o + b * w->rows. Rows are the outer loop, so a block reads each
+// weight row from flash once; every (row, position) is computed exactly as
+// with one position.
 typedef struct {
     float *o;
+    float *const *outs;  // if set, position b writes outs[b] instead
     const tai_model *m;
     const tai_q4 *w;
+    int nb;
 } mm_job;
+
+static float *out_row(const mm_job *j, int b) { return j->outs ? j->outs[b] : j->o + (size_t)b * j->w->rows; }
 
 // IEEE half -> float. Scales are positive normals (export keeps them there);
 // zero and subnormals are handled anyway.
@@ -426,11 +435,13 @@ static float half_to_float(uint16_t h) {
 static void matmul4_rows(void *ctx, int lo, int hi) {
     const mm_job *j = (const mm_job *)ctx;
     const tai_q4 *w = j->w;
-    int groups = w->cols / TAI_GROUP;
-    const uint8_t *p = w->q + (size_t)lo * (w->cols / 2);
-    const uint16_t *s = w->s + (size_t)lo * groups;
-    for (int r = lo; r < hi; r++) {
-        const int8_t *x = j->m->xq;
+    int groups = w->cols / TAI_GROUP, big = widest(j->m), gs = big / TAI_GROUP + 1;
+    for (int r = lo; r < hi; r++)
+    for (int nb = 0; nb < j->nb; nb++) {
+        const uint8_t *p = w->q + (size_t)r * (w->cols / 2);
+        const uint16_t *s = w->s + (size_t)r * groups;
+        const int8_t *x = j->m->xq + (size_t)nb * big;
+        const int32_t *xsum = j->m->xsum + (size_t)nb * gs;
         float acc = 0;
         for (int g = 0; g < groups; g++, s++) {
             int32_t dot = 0;
@@ -442,9 +453,9 @@ static void matmul4_rows(void *ctx, int lo, int hi) {
                        (int32_t)((b >> 16) & 15) * x[4] + (int32_t)((b >> 20) & 15) * x[5] +
                        (int32_t)((b >> 24) & 15) * x[6] + (int32_t)(b >> 28) * x[7];
             }
-            acc += (float)(dot - 8 * j->m->xsum[g]) * half_to_float(*s);
+            acc += (float)(dot - 8 * xsum[g]) * half_to_float(*s);
         }
-        j->o[r] = acc * j->m->xs;
+        out_row(j, nb)[r] = acc * j->m->xs[nb];
     }
 }
 
@@ -461,17 +472,18 @@ static void init_trits(void) {
 static void matmul3_rows(void *ctx, int lo, int hi) {
     const mm_job *j = (const mm_job *)ctx;
     const tai_q4 *w = j->w;
-    int stride = (w->cols + 4) / 5, full = w->cols / 5, rest = w->cols - 5 * full;
-    for (int r = lo; r < hi; r++) {
+    int stride = (w->cols + 4) / 5, full = w->cols / 5, rest = w->cols - 5 * full, big = widest(j->m);
+    for (int r = lo; r < hi; r++)
+    for (int nb = 0; nb < j->nb; nb++) {
         const uint8_t *p = w->q + (size_t)r * stride;
-        const int8_t *x = j->m->xq;
+        const int8_t *x = j->m->xq + (size_t)nb * big;
         int32_t dot = 0;
         for (int b = 0; b < full; b++, x += 5) {
             const int8_t *t = trits[p[b]];
             dot += t[0] * x[0] + t[1] * x[1] + t[2] * x[2] + t[3] * x[3] + t[4] * x[4];
         }
         for (int i = 0; i < rest; i++) dot += trits[p[full]][i] * x[i];
-        j->o[r] = (float)dot * half_to_float(w->s[r]) * j->m->xs;
+        out_row(j, nb)[r] = (float)dot * half_to_float(w->s[r]) * j->m->xs[nb];
     }
 }
 
@@ -480,11 +492,40 @@ static void matmul3_rows(void *ctx, int lo, int hi) {
 static void matmul2_rows(void *ctx, int lo, int hi) {
     const mm_job *j = (const mm_job *)ctx;
     const tai_q4 *w = j->w;
-    int groups = w->cols / TAI_GROUP;
-    const uint8_t *p = w->q + (size_t)lo * (w->cols / 4);
-    const uint16_t *s = w->s + (size_t)lo * groups;
+    int groups = w->cols / TAI_GROUP, big = widest(j->m), gs = big / TAI_GROUP + 1;
+    // A block unpacks each row once (u = 0..3 per byte) and reuses it for
+    // every position: the same integer sums, without the shifts each time.
+    uint8_t *u = j->nb > 1 ? j->m->rowbuf + (lo == 0 ? 0 : big) : NULL;  // core 0 runs from row 0
     for (int r = lo; r < hi; r++) {
-        const int8_t *x = j->m->xq;
+    if (u) {
+        const uint8_t *p = w->q + (size_t)r * (w->cols / 4);
+        for (int i = 0; i < w->cols / 16; i++, p += 4) {
+            uint32_t b;
+            memcpy(&b, ALIGNED4(p), 4);
+            for (int k = 0; k < 16; k++) u[16 * i + k] = (uint8_t)((b >> (2 * k)) & 3);
+        }
+        for (int nb = 0; nb < j->nb; nb++) {
+            const uint16_t *s = w->s + (size_t)r * groups;
+            const int8_t *x = j->m->xq + (size_t)nb * big;
+            const int32_t *xsum = j->m->xsum + (size_t)nb * gs;
+            const uint8_t *uu = u;
+            float acc = 0;
+            for (int g = 0; g < groups; g++, s++) {
+                int32_t dot = 0;
+                for (int i = 0; i < TAI_GROUP; i++) dot += (int32_t)uu[i] * x[i];
+                uu += TAI_GROUP;
+                x += TAI_GROUP;
+                acc += (float)(2 * dot - 3 * xsum[g]) * 0.5f * half_to_float(*s);
+            }
+            out_row(j, nb)[r] = acc * j->m->xs[nb];
+        }
+        continue;
+    }
+    for (int nb = 0; nb < j->nb; nb++) {
+        const uint8_t *p = w->q + (size_t)r * (w->cols / 4);
+        const uint16_t *s = w->s + (size_t)r * groups;
+        const int8_t *x = j->m->xq + (size_t)nb * big;
+        const int32_t *xsum = j->m->xsum + (size_t)nb * gs;
         float acc = 0;
         for (int g = 0; g < groups; g++, s++) {
             int32_t dot = 0;
@@ -493,14 +534,15 @@ static void matmul2_rows(void *ctx, int lo, int hi) {
                 memcpy(&b, ALIGNED4(p), 4);  // one flash read for 16 weights
                 for (int k = 0; k < 16; k++) dot += (int32_t)((b >> (2 * k)) & 3) * x[k];
             }
-            acc += (float)(2 * dot - 3 * j->m->xsum[g]) * 0.5f * half_to_float(*s);
+            acc += (float)(2 * dot - 3 * xsum[g]) * 0.5f * half_to_float(*s);
         }
-        j->o[r] = acc * j->m->xs;
+        out_row(j, nb)[r] = acc * j->m->xs[nb];
+    }
     }
 }
 
-static void matmul4(float *o, const tai_model *m, const tai_q4 *w) {
-    mm_job j = {o, m, w};
+static void matmul4(float *o, float *const *outs, const tai_model *m, const tai_q4 *w, int nb) {
+    mm_job j = {o, outs, m, w, nb};
     tai_job rows = w->kind == TAI_VERSION_TERNARY ? matmul3_rows
                    : w->kind == TAI_VERSION_INT2  ? matmul2_rows
                                                   : matmul4_rows;
@@ -510,9 +552,10 @@ static void matmul4(float *o, const tai_model *m, const tai_q4 *w) {
 
 void tai_set_parallel(tai_model *m, tai_parallel_fn fn) { m->parallel = fn; }
 
-static void mm4(float *o, tai_model *m, const float *x, const tai_q4 *w) {
-    set_input(m, x, w->cols);
-    matmul4(o, m, w);
+static void mm4(float *o, float *const *outs, tai_model *m, const float *x, float *const *rows,
+                const tai_q4 *w, int nb) {
+    set_input(m, x, rows, w->cols, nb);
+    matmul4(o, outs, m, w, nb);
 }
 
 static float gelu(float x) {
@@ -537,54 +580,69 @@ static void softmax(float *x, int n) {
 
 // ---------------------------------------------------------------- forward
 
-static void forward(tai_model *m, int token, int pos) {
+// Positions pos .. pos + nb - 1 (tokens tok[0..nb), nb <= m->block) through
+// the model; logits for the last one only if want_logits. Each position's
+// arithmetic is the same as when it runs alone: only the order in which
+// positions take turns changes, so answers are bit-identical for any nb.
+static void forward(tai_model *m, const int *tok, int pos, int nb, int want_logits) {
     int D = m->dim, H = m->hidden, NH = m->heads, NKV = m->kv_heads, hd = D / NH;
     int KV = NKV * hd, rep = NH / NKV;
-    const int8_t *te = m->tok.q + (size_t)token * D, *pe = m->pos.q + (size_t)pos * D;
-    float ts = m->tok.s[token], ps = m->pos.s[pos];
-    for (int i = 0; i < D; i++) m->x[i] = te[i] * ts + pe[i] * ps;
+    for (int b = 0; b < nb; b++) {
+        const int8_t *te = m->tok.q + (size_t)tok[b] * D, *pe = m->pos.q + (size_t)(pos + b) * D;
+        float ts = m->tok.s[tok[b]], ps = m->pos.s[pos + b];
+        float *x = m->x + (size_t)b * D;
+        for (int i = 0; i < D; i++) x[i] = te[i] * ts + pe[i] * ps;
+    }
 
     for (int l = 0; l < m->layers; l++) {
         const tai_layer *L = &m->layer[l];
-        rmsnorm(m->xb, m->x, L->n1, D);
-        set_input(m, m->xb, D);
-        matmul4(m->q, m, &L->wq);
-        matmul4(m->k, m, &L->wk);
-        matmul4(m->v, m, &L->wv);
-        for (int h = 0; h < NKV; h++) {
-            size_t off = (size_t)pos * KV + (size_t)h * hd;
-            m->ks[l][pos * NKV + h] = quantize(m->kc[l] + off, m->k + h * hd, hd);
-            m->vs[l][pos * NKV + h] = quantize(m->vc[l] + off, m->v + h * hd, hd);
-        }
+        for (int b = 0; b < nb; b++) rmsnorm(m->xb + (size_t)b * D, m->x + (size_t)b * D, L->n1, D);
+        set_input(m, m->xb, NULL, D, nb);
+        matmul4(m->q, NULL, m, &L->wq, nb);
+        matmul4(m->k, NULL, m, &L->wk, nb);
+        matmul4(m->v, NULL, m, &L->wv, nb);
+        for (int b = 0; b < nb; b++)
+            for (int h = 0; h < NKV; h++) {
+                int p = pos + b;
+                size_t off = (size_t)p * KV + (size_t)h * hd;
+                m->ks[l][p * NKV + h] = quantize(m->kc[l] + off, m->k + (size_t)b * KV + h * hd, hd);
+                m->vs[l][p * NKV + h] = quantize(m->vc[l] + off, m->v + (size_t)b * KV + h * hd, hd);
+            }
         float scale = rsqrt((float)hd);
-        for (int h = 0; h < NH; h++) {
-            int kvh = h / rep;  // grouped-query attention: heads share K/V
-            const float *q = m->q + h * hd;
-            for (int t = 0; t <= pos; t++) {
-                const int8_t *k = m->kc[l] + (size_t)t * KV + kvh * hd;
-                float s = 0;
-                for (int i = 0; i < hd; i++) s += q[i] * k[i];
-                m->att[t] = s * m->ks[l][t * NKV + kvh] * scale;
-            }
-            softmax(m->att, pos + 1);
-            float *o = m->xb + h * hd;
-            for (int i = 0; i < hd; i++) o[i] = 0;
-            for (int t = 0; t <= pos; t++) {
-                const int8_t *v = m->vc[l] + (size_t)t * KV + kvh * hd;
-                float a = m->att[t] * m->vs[l][t * NKV + kvh];
-                for (int i = 0; i < hd; i++) o[i] += a * v[i];
+        for (int b = 0; b < nb; b++) {
+            int p = pos + b;  // attends to positions 0..p, all in the KV cache by now
+            for (int h = 0; h < NH; h++) {
+                int kvh = h / rep;  // grouped-query attention: heads share K/V
+                const float *q = m->q + (size_t)b * D + h * hd;
+                for (int t = 0; t <= p; t++) {
+                    const int8_t *k = m->kc[l] + (size_t)t * KV + kvh * hd;
+                    float s = 0;
+                    for (int i = 0; i < hd; i++) s += q[i] * k[i];
+                    m->att[t] = s * m->ks[l][t * NKV + kvh] * scale;
+                }
+                softmax(m->att, p + 1);
+                float *o = m->xb + (size_t)b * D + h * hd;
+                for (int i = 0; i < hd; i++) o[i] = 0;
+                for (int t = 0; t <= p; t++) {
+                    const int8_t *v = m->vc[l] + (size_t)t * KV + kvh * hd;
+                    float a = m->att[t] * m->vs[l][t * NKV + kvh];
+                    for (int i = 0; i < hd; i++) o[i] += a * v[i];
+                }
             }
         }
-        mm4(m->q, m, m->xb, &L->wo);  // m->q reused as scratch
-        for (int i = 0; i < D; i++) m->x[i] += m->q[i];
+        mm4(m->q, NULL, m, m->xb, NULL, &L->wo, nb);  // m->q reused as scratch
+        for (size_t i = 0; i < (size_t)nb * D; i++) m->x[i] += m->q[i];
 
-        rmsnorm(m->xb, m->x, L->n2, D);
-        mm4(m->hb, m, m->xb, &L->w1);
-        for (int i = 0; i < H; i++) m->hb[i] = gelu(m->hb[i]);
-        mm4(m->xb, m, m->hb, &L->w2);
-        for (int i = 0; i < D; i++) m->x[i] += m->xb[i];
+        for (int b = 0; b < nb; b++) rmsnorm(m->xb + (size_t)b * D, m->x + (size_t)b * D, L->n2, D);
+        mm4(NULL, m->hb, m, m->xb, NULL, &L->w1, nb);
+        for (int b = 0; b < nb; b++)
+            for (int i = 0; i < H; i++) m->hb[b][i] = gelu(m->hb[b][i]);
+        mm4(m->xb, NULL, m, NULL, m->hb, &L->w2, nb);
+        for (size_t i = 0; i < (size_t)nb * D; i++) m->x[i] += m->xb[i];
     }
-    rmsnorm(m->xb, m->x, m->norm, D);
+    if (!want_logits) return;
+    const float *x = m->x + (size_t)(nb - 1) * D;
+    rmsnorm(m->xb, x, m->norm, D);
     // Output head tied to the int8 embedding.
     for (int v = 0; v < m->vocab; v++) {
         const int8_t *e = m->tok.q + (size_t)v * D;
@@ -594,22 +652,82 @@ static void forward(tai_model *m, int token, int pos) {
     }
 }
 
+static int argmax_logits(const tai_model *m) {
+    int best = 0;
+    for (int i = 1; i < m->vocab; i++)
+        if (m->logits[i] > m->logits[best]) best = i;
+    return best;
+}
+
 static void generate_normalized(tai_model *m, const char *norm, char *out, int out_len) {
-    int pos = 0, n = 0, tok;
-    for (const char *c = norm; *c && pos < m->ctx - 1; c++) forward(m, encode_char(*c), pos++);
-    tok = TAI_SEP;
+    // The question and the separator go through in blocks: nothing is read
+    // from their outputs but the separator's, which predicts the first letter.
+    int toks[TAI_MAX_Q + 1], nt = 0, n = 0;
+    for (const char *c = norm; *c && nt < m->ctx - 1 && nt < TAI_MAX_Q; c++) toks[nt++] = encode_char(*c);
+    out[0] = 0;
+    if (nt >= m->ctx || out_len < 2) return;
+    toks[nt++] = TAI_SEP;
+    for (int i = 0; i < nt; i += m->block) {
+        int k = nt - i < m->block ? nt - i : m->block;
+        forward(m, toks + i, i, k, i + k == nt);
+    }
     // Greedy decoding: the most likely answer, every time. No sampling, no
     // creativity, no rambling. Stops at EOS or the hard length cap.
-    while (pos < m->ctx && n < TAI_MAX_A && n < out_len - 1) {
-        forward(m, tok, pos++);
-        int best = 0;
-        for (int i = 1; i < m->vocab; i++)
-            if (m->logits[i] > m->logits[best]) best = i;
+    for (int pos = nt;;) {
+        int best = argmax_logits(m);
         if (best == TAI_EOS || best == TAI_SEP) break;
         out[n++] = (char)(best + 30);
-        tok = best;
+        if (pos >= m->ctx || n >= TAI_MAX_A || n >= out_len - 1) break;
+        forward(m, &best, pos++, 1, 1);
     }
     out[n] = 0;
+}
+
+size_t tai_block_bytes(const tai_model *m) {
+    size_t D = (size_t)m->dim, KV = (size_t)m->kv_heads * (D / (size_t)m->heads), big = (size_t)widest(m);
+    return 4 * (3 * D + 2 * KV + big + big / TAI_GROUP + 1 + 1) + big;
+}
+
+static void free_block(tai_model *m) {
+    if (m->hb)
+        for (int b = 0; b < m->block; b++) free(m->hb[b]);
+    free(m->x); free(m->xb); free(m->q); free(m->k); free(m->v); free(m->hb);
+    free(m->xq); free(m->xsum); free(m->xs); free(m->rowbuf);
+    m->x = m->xb = m->q = m->k = m->v = NULL;
+    m->hb = NULL;
+    m->xq = NULL;
+    m->xsum = NULL;
+    m->xs = NULL;
+    m->rowbuf = NULL;
+    m->block = 0;
+}
+
+int tai_set_block(tai_model *m, int n) {
+    size_t D = (size_t)m->dim, KV = (size_t)m->kv_heads * (D / (size_t)m->heads), big = (size_t)widest(m);
+    if (n < 1) n = 1;
+    if (n > TAI_MAX_Q + 1) n = TAI_MAX_Q + 1;  // a question and its separator
+    for (;; n--) {
+        free_block(m);
+        size_t B = (size_t)n;
+        m->x = (float *)zalloc(B * D * 4);
+        m->xb = (float *)zalloc(B * D * 4);
+        m->q = (float *)zalloc(B * D * 4);
+        m->k = (float *)zalloc(B * KV * 4);
+        m->v = (float *)zalloc(B * KV * 4);
+        m->hb = (float **)zalloc(B * sizeof(float *));
+        m->xq = (int8_t *)zalloc(B * big);
+        m->xsum = (int32_t *)zalloc(B * (big / TAI_GROUP + 1) * 4);
+        m->xs = (float *)zalloc(B * 4);
+        m->rowbuf = (uint8_t *)zalloc(2 * big);
+        int ok = m->x && m->xb && m->q && m->k && m->v && m->hb && m->xq && m->xsum && m->xs && m->rowbuf;
+        if (m->hb) m->block = n;  // so free_block frees the rows allocated so far
+        for (int b = 0; ok && b < n; b++) ok = (m->hb[b] = (float *)zalloc(big * 4)) != NULL;
+        if (ok) return m->block = n;
+        if (n == 1) {
+            free_block(m);
+            return 0;
+        }
+    }
 }
 
 void tai_generate(tai_model *m, const char *question, char *out, int out_len) {

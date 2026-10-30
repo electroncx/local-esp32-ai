@@ -89,6 +89,7 @@ who wrote hamlet        William Shakespeare.
 ```sh
 ./host/tinyai firmware/data/model.bin --why    # also shows which fact it matched
 ./host/tinyai firmware/data/model.bin --time   # shows how long each answer took
+./host/tinyai firmware/data/model.bin --block 1  # one question character per model pass (slower, same answers)
 ```
 
 To see timing on the ESP32, set `SHOW_TIMING 1` in `firmware/src/main.cpp` and re-flash.

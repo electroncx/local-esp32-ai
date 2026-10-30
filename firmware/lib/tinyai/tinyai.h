@@ -86,10 +86,16 @@ typedef struct {
     const uint16_t *errata_fact;  // sorted fact indices
     const char *errata;           // their answers, in the same order
     // runtime state (heap)
-    float *x, *xb, *hb, *q, *k, *v, *att, *logits;
-    int8_t *xq;
-    int32_t *xsum;       // per-group sums of xq, for the int4 kernel
-    float xs;
+    // Per-position buffers for a block of up to `block` prompt positions
+    // (see tai_set_block): position b's x is x + b * dim, and so on.
+    int block;
+    float *x, *xb, *q, *k, *v, *att, *logits;
+    float **hb;          // [block] hidden activations, one allocation per position
+                         // (the biggest buffer; the ESP32's heap is fragmented)
+    int8_t *xq;          // [block][max(dim, hidden)]
+    int32_t *xsum;       // per-group sums of xq, for the int4/int2 kernels
+    float *xs;           // [block] input scales
+    uint8_t *rowbuf;     // [2][max(dim, hidden)]: a weight row unpacked once per block, per core
     int8_t **kc, **vc;   // [layer][ctx * kv_dim]
     float **ks, **vs;    // [layer][ctx * kv_heads]
     tai_parallel_fn parallel;
@@ -116,6 +122,14 @@ static inline const char *tai_word(const tai_model *m, int i) {
 // The stored answer for fact i (0-based) if it is on the errata list, else
 // NULL. "" = a fact the model gets wrong that is refused instead.
 const char *tai_errata(const tai_model *m, int fact);
+
+// Prompt characters are run through the model in blocks of up to n, so each
+// weight row is read from flash once per block instead of once per
+// character; answers are bit-identical for every n. Needs about
+// tai_block_bytes() of heap per position. Returns the block size it got
+// (the largest up to n whose buffers fit; 0 if not even 1 does).
+int tai_set_block(tai_model *m, int n);
+size_t tai_block_bytes(const tai_model *m);
 
 // Model only, no gate: generate from `question` as typed. For experiments.
 void tai_generate(tai_model *m, const char *question, char *out, int out_len);
