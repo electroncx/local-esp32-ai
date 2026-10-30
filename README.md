@@ -28,7 +28,7 @@ esp: I don't know.
 | Weights | 2-bit (fp16 scale per 32 weights), quantization-aware trained |
 | Knowledge | 37,288 facts (288 survival), 146,994 accepted phrasings |
 | Model file | 3.5 MB, filling a 4 MB board's flash |
-| RAM | about 90 KB, plus the spare heap (about 150 KB) put to work for speed: questions run through the model in 15-character blocks |
+| RAM | about 90 KB, plus the spare heap (about 165 KB) put to work for speed: questions run through the model in 17-character blocks |
 | Boards | ESP32, ESP32-S3, ESP32-C3 with 4 MB flash |
 | Answers | 48 characters max, or `I don't know.` |
 
