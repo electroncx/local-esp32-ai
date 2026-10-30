@@ -26,8 +26,8 @@ esp: I don't know.
 |---|---|
 | Model | 5,472,640-parameter GPT: 6 layers, dim 320, 5 heads, context 96 |
 | Weights | 2-bit (fp16 scale per 32 weights), quantization-aware trained |
-| Knowledge | 33,788 facts answered (288 survival), 146,757 accepted phrasings |
-| Model file | 3.6 MB, filling a 4 MB board's flash |
+| Knowledge | 37,288 facts (288 survival), 146,994 accepted phrasings |
+| Model file | 3.5 MB, filling a 4 MB board's flash |
 | RAM | about 90 KB (235 KB heap still free) |
 | Boards | ESP32, ESP32-S3, ESP32-C3 with 4 MB flash |
 | Answers | 48 characters max, or `I don't know.` |
@@ -36,7 +36,7 @@ esp: I don't know.
 ## What it knows
 
 - **Survival:** 288 facts on water, fire, shelter, signaling, navigation, food, cold, heat, wildlife, weather, first aid and knots, from CDC, NWS, National Park Service, Ready.gov, Red Cross, NHS, WHO and the US Army survival manual.
-- **General knowledge:** 33,712 facts from Wikidata (people, places, books, films, science) and about 3,300 more from datasets and hand-written lists. The 3,500 lesser-known Wikidata facts the model gets wrong answer `I don't know.` instead.
+- **General knowledge:** 33,712 facts from Wikidata (people, places, books, films, science) and about 3,300 more from datasets and hand-written lists.
 - **Calculated, not memorized:** math, money, units, times, dates, water for N people, bleach doses, lightning distance.
 
 Anything it doesn't know gets `I don't know.` instead of a guess.
@@ -69,8 +69,8 @@ More examples and tips: [docs/usage.md](docs/usage.md). To try it on a PC withou
 
 | | |
 |---|---|
-| Trained questions answered exactly | 146,757 / 146,757 |
-| Test questions it never trained on | 372 / 391 right, **0 wrong** (the other 19 say `I don't know.`) |
+| Trained questions answered exactly | 146,995 / 146,995 |
+| Test questions it never trained on | 399 / 417 right, **0 wrong** (the other 18 say `I don't know.`) |
 | Real firmware in the ESP32 emulator | same answer as the PC on 350 / 350 |
 
 On survival questions worded in ways it hasn't seen, expect it to answer about half and refuse the rest. Short, plain questions work best. Run every check yourself with `./test.sh` (details in [docs/details.md](docs/details.md#results)).

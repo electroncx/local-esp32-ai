@@ -54,7 +54,11 @@ curriculum and shrinking every piece down to microcontroller size:
 - the method, after "with" or "using": "purify water **with a lifestraw**" is not "boil it"
 - who it's for, or a number or negation: "my **friend** fell through the ice" needs rescue advice, not self-rescue, and "**baby**", "**dog**" and "**5** gallons" all change the answer
 
-Each of those rules came from a wrong answer found in testing ([below](#survival-questions)).
+Two more rules apply to every question:
+- a question that says who it's for ("my **friend** fainted") only matches a phrasing that is present in full: otherwise "friend fainted from heat", missing just "heat", gave the heat-stroke answer
+- "help" is filler, like "please": "**help** forest fire coming" was reaching the signal-fire answer through "signal for help"
+
+Each of those rules came from a wrong answer found in testing ([below](#survival-questions)). Beyond the test questions, a stress test adds who-it's-for and filler words ("my friend", "my kid", "someone", "help", "quick", "please", "in the woods", "right now") to every survival phrasing: 23,208 variants. With these rules, 15,567 reach their own fact, 7,621 are refused, and 20 reach another fact, all on purpose or harmless: "someone fell through the ice" gets the rescue advice rather than the self-rescue one, and "lightning in the woods" gets one of two safe lightning answers.
 
 ## How a question is answered
 
@@ -63,9 +67,9 @@ Each of those rules came from a wrong answer found in testing ([below](#survival
    │ normalize         lowercase, strip junk            "whats the best way to purify water"
    │ compute           math, money, units, dates,        not computable
    │                   water, bleach, lightning
-   │ knowledge gate    indexed match, 146,757 phrasings  fact #3,307  ("what's the best way" = "how")
+   │ knowledge gate    indexed match, 146,994 phrasings  fact #3,307  ("what's the best way" = "how")
    │                   no match -> "I don't know."
-   │ errata            fact stored as text? answer it   (or refuse: model wrong, no room)
+   │ errata            model wrong on this fact? its stored answer
    │ model (2-bit GPT) fact's shortest phrasing -> answer "how to clean water"
    ▼                   greedy, stops at EOS, 48 chars max
 "Boil it for 1 minute (3 above 5,000 ft)."
@@ -102,15 +106,15 @@ v1 was the first build: a small int8 model that tried to answer from raw text. v
 |---|---|---|---|
 | Parameters | 616K | 2.03M (dim 192) | **5.47M** (dim 320, MLP 1024) |
 | Weights | int8 | int4, 4.5 bits each | **int2, 2.5 bits each** |
-| Facts answered right | 309 | 24,855 (198 survival) | **33,788** (288 survival) |
+| Facts answered right | 309 | 24,855 (198 survival) | **37,288** (288 survival), all it stores |
 | ...straight from the model | | 24,823 | **32,387** |
-| Accepted phrasings | 639 | 97,486 | **146,757** |
-| Model file (flash) | 720 KB | 2,416 KB | **3,668 KB** |
+| Accepted phrasings | 639 | 97,486 | **146,994** |
+| Model file (flash) | 720 KB | 2,416 KB | **3,613 KB** |
 | Computed questions | arithmetic | + money, units, times, time zones, dates, BMI, bases, primes, dice, survival sums | same |
 | Knowledge gate | scans every phrasing | word index, strict for names, lenient for advice | same |
 | Matmuls on dual-core chips | 1 core | 2 cores | 2 cores |
-| Trained phrasings correct | 97% | 100% | **100%** (146,757) |
-| Test questions never trained on, wrong answers | 10 of 68 | 0 of 356 | **0 of 391** |
+| Trained phrasings correct | 97% | 100% | **100%** (146,995) |
+| Test questions never trained on, wrong answers | 10 of 68 | 0 of 356 | **0 of 417** |
 
 v2 is still one command away (`python train/train.py`, then `export.py --tier small`), and it answers about 1.5x faster per character on the chip (1.1 MB of weights to stream instead of 1.7 MB).
 
@@ -119,7 +123,8 @@ v2 is still one command away (`python train/train.py`, then `export.py --tier sm
 - **Shortest phrasing as the key.** On the chip every prompt character is a full forward pass, so each fact's key is its shortest accepted phrasing ("gold melting point", not "what is the melting point of gold").
 - **2-bit weights with quantization-aware training.** 2.5 bits per weight: four levels (−1.5, −0.5, +0.5, +1.5) times one fp16 scale per 32 weights, the scale set to 1.2x the group's mean |w|. The second half of training uses the rounded weights through a straight-through estimator, and `export.py` asserts its rounding matches training bit for bit. At the same flash size, 2-bit fits 2.7x the parameters of v2's int4. That bought 9,000 more facts, not 2.7x the knowledge: a 2-bit weight stores less than a 4-bit one.
 - **Flash bandwidth is the real bottleneck.** Weights stream from memory-mapped flash through a 32 KB cache. The 2-bit kernel reads 16 weights per 32-bit load and works on unsigned codes u = 0..3 with a precomputed-sum correction: Σ(u−1.5)·x = (2·Σu·x − 3·Σx) / 2, all in integers until the final scale.
-- **Errata, and refusing what doesn't fit.** `export.py` runs the real C engine on every fact's key and collects the ones the model gets wrong (4,901 of 37,288). It stores their correct answers as text, in priority order: every hand-written and survival fact first, always, then Wikidata facts, best known first. It stops when the file reaches its size limit (`--max-bytes`, set so the firmware fits the 4 MB board). The 3,500 left over are lesser-known Wikidata facts, listed in `firmware/data/model.dropped`, and they answer `I don't know.`: a fact the model can't get right is refused, never guessed. Continuing training to fix wrong facts made things worse in v2 (24,850 → 24,811), because every update flips rounding across the whole network.
+- **Errata: the facts the model gets wrong, stored right.** `export.py` runs the real C engine on every fact's key and collects the ones the model gets wrong (4,901 of 37,288), then stores their correct answers as text. If they ever don't fit the size limit (`--max-bytes`, set so the firmware fits the 4 MB board), it stores them in priority order (hand-written and survival facts always, then Wikidata facts, best known first) and the rest answer `I don't know.`, listed in `firmware/data/model.dropped`: a fact the model can't get right is refused, never guessed. Today they all fit, so `model.dropped` is empty.
+- **A compact index made the room.** The first 2-bit build had to refuse 3,500 facts. The gate index stored a word count for each of its 147,000 phrasings and a 4-byte offset for each dictionary word. Word ids only need 15 bits, so bit 15 now marks each phrasing's last word, and offsets are 16-bit with a 4-byte base per 256 words. That freed 180 KB, enough to store every wrong answer, in a file 56 KB smaller than before. `export.py --from-bin` rebuilt the file from the shipped model's own weights, without retraining. Continuing training to fix wrong facts made things worse in v2 (24,850 → 24,811), because every update flips rounding across the whole network.
 - **Bit-identical on every chip.** Errata are found on a PC, so the ESP32 must compute exactly the same floats, or a fact that is right on the PC could come out wrong on the board. The first 2-bit build disagreed with the PC on 3 of 350 emulator questions ("biggest planet in the solar system" → "Johnumber, Pope."). The ESP32's FPU fuses multiply-adds, and its libm's `expf`/`tanhf`/`sqrtf` differ from a PC's. Inference now uses only +, −, × and int↔float conversions, which IEEE 754 rounds identically everywhere, with its own exp, reciprocal and inverse square root. Both builds use `-ffp-contract=off`. After the fix: 400/400 identical, including those 3.
 - **Grouped-query attention** halves the K/V projections and the KV cache.
 - **Both cores.** On the ESP32 and ESP32-S3 each matmul is split across the two cores with FreeRTOS task notifications. Output rows are independent, so answers are bit-identical to single-core.
@@ -142,8 +147,8 @@ v2 is still one command away (`python train/train.py`, then `export.py --tier sm
 |---|---|
 | Architecture | GPT: 6 layers, dim 320, 5 query heads / 1 K/V head, MLP 1024, context 96, tied embeddings |
 | Parameters | 5,472,640 |
-| Knowledge | 33,788 facts answered right of 37,288 stored (the other 3,500 are refused), 146,757 accepted phrasings, plus computed answers |
-| Model in flash | 3,668 KB: 2-bit weights and int8 embeddings 1,727 KB, gate index 1,568 KB, fact keys and 1,401 stored answers 373 KB |
+| Knowledge | 37,288 facts, 146,994 accepted phrasings, plus computed answers |
+| Model in flash | 3,613 KB: 2-bit weights and int8 embeddings 1,727 KB, gate index 1,393 KB, fact keys and 4,901 stored answers 492 KB |
 | RAM at runtime | about 90 KB: int8 KV cache 77 KB, activations and buffers about 13 KB (235 KB of heap still free on an ESP32) |
 | Engine code | pure C99, no dependencies; bit-identical floats on every chip |
 | Works on | ESP32, ESP32-S3, ESP32-C3 (4 MB flash) |
@@ -154,17 +159,17 @@ v2 is still one command away (`python train/train.py`, then `export.py --tier sm
 
 | Test | Score |
 |---|---|
-| Every trained phrasing (the questions the gate was built from) | 146,757 / 146,757 (the 3,500 refused facts must answer `I don't know.`, and do) |
+| Every trained phrasing (the questions the gate was built from) | 146,995 / 146,995 |
 | Every fact's key, answered by the model alone (no stored answers) | 32,387 / 37,288 |
-| Test questions it never trained on | 372 / 391 right, **0 wrong**, 19 `I don't know.` |
+| Test questions it never trained on | 399 / 417 right, **0 wrong**, 18 `I don't know.` |
 | Test questions that are also trained phrasings | 153 / 154, 0 wrong (1 is a refused fact) |
-| Gate index parses like the C gate | 146,756 / 146,756 |
+| Gate index parses like the C gate | 146,994 / 146,994 |
 | Answers over 48 chars or starting with filler | 0 |
 | ESP32 firmware in the emulator vs the PC build | 350 / 350 identical |
 
 ### Test questions
 
-`data/eval.tsv` and `data/eval_more.tsv` hold 545 questions, each typed as a person would (missing apostrophes, no capitals, extra words, typos), each with one exact expected answer. The C engine must produce that answer character for character: a close answer counts as wrong. 154 of them turned out to match a trained phrasing exactly; they are scored separately, and the other 391 are the "never trained on" score.
+`data/eval.tsv` and `data/eval_more.tsv` hold 589 questions, each typed as a person would (missing apostrophes, no capitals, extra words, typos), each with one exact expected answer. The C engine must produce that answer character for character: a close answer counts as wrong. 172 of them match a trained phrasing exactly (some because an alias was added for that wording); they are scored separately, and the other 417 are the "never trained on" score.
 
 | Group | Examples | Right | Wrong | Refused |
 |---|---|---|---|---|
@@ -173,25 +178,27 @@ v2 is still one command away (`python train/train.py`, then `export.py --tier sm
 | Must refuse | "how many moons does jupiter have", "how far is pluto" | 19 / 19 | 0 | 0 |
 | Everyday, batch 1 | "whats the safe temp for chicken", "15% tip on 42.50", 10 must-refuse | 90 / 90 | 0 | 0 |
 | Everyday, batch 2 | 85 more, written after batch 1 was tuned | 85 / 85 | 0 | 0 |
-| Wikidata knowledge | "einstein birthday", "how high is kilimanjaro", "who was roosevelt" (must refuse: ambiguous) | 38 / 40 | 0 | 2 (facts the model gets wrong, refused) |
+| Wikidata knowledge | "einstein birthday", "how high is kilimanjaro", "who was roosevelt" (must refuse: ambiguous) | 40 / 40 | 0 | 0 |
 | Survival, batches 1-3 | "can i eat snow if im thirsty", "a moose is charging at me" | 167 / 170 | 0 | 3 |
-| Survival, batch 4 | "how hard do i push for cpr on a toddler", "are toads edible" | 21 / 36 | 0 | 15 |
-| **Total** | | **525 / 545** | **0** | **20** |
+| Survival, batch 4 | "how hard do i push for cpr on a toddler", "are toads edible" | 35 / 36 | 0 | 1 |
+| Survival, batch 5 | "my kid isnt breathing how do i do cpr", "how do i get a grease fire out", 4 must-refuse | 30 / 44 | 0 | 14 |
+| **Total** | | **571 / 589** | **0** | **18** |
 
 "Refused" means `I don't know.`: safe, but a miss. "Wrong" means a different answer, the failure this project is built to prevent.
 
 #### Survival questions
 
-The survival tests were written in four batches, each *before* looking at how the gate handled it, and each first score is recorded here as it was:
+The survival tests were written in five batches, each *before* looking at how the gate handled it, and each first score is recorded here as it was:
 
 | Batch | First run, before any change | What was fixed afterwards |
 |---|---|---|
 | 1: 69 questions | 34 right, **0 wrong**, 33 refused | synonyms (frostbitten, forest, elevation, "no matches"), more phrasings |
 | 2: 55 questions | 22 right, **0 wrong**, 33 refused | lenient advice facts; "what's the best way to" = "how" |
 | 3: 47 questions | 23 right, **5 wrong**, 19 refused | the leniency rules above: freezer vs fridge, "with a flint", "my friend", "how can I **tell** if" |
-| 4: 35 questions (the 90 newer facts) | 20 right, **0 wrong**, 15 refused | nothing: left as a measure of unseen wording |
+| 4: 35 questions (the 90 newer facts) | 20 right, **0 wrong**, 15 refused | aliases for the 90 newer facts, which had 3.2 phrasings each to the older facts' 7.1; 18 of the batch's questions are now trained phrasings, so it is a regression test |
+| 5: 44 questions | 28 right, **1 wrong**, 15 refused | "my friend just fainted" got the heat-stroke answer: the who-it's-for and "help" rules above |
 
-The honest takeaway: **on survival questions worded in a way it hasn't seen, expect it to answer about half and decline the rest.** Batch 3 is the warning: the first version of the leniency rule gave 5 wrong answers in 47 questions. Today all 545 test questions give either the right answer or `I don't know.`, but a new batch could find a new way to be wrong. Keep questions short and plain ("signs of hypothermia", "how to purify water") for the best results.
+The honest takeaway: **on survival questions worded in a way it hasn't seen, expect it to answer about half and decline the rest.** Batch 3 is the warning: the first version of the leniency rule gave 5 wrong answers in 47 questions. Today all 589 test questions give either the right answer or `I don't know.`, but a new batch could find a new way to be wrong. Keep questions short and plain ("signs of hypothermia", "how to purify water") for the best results.
 
 **What "never trained on" means, precisely.** The model never saw any of these questions. The knowledge gate was adjusted while looking at the results of each batch, so after its fixes each batch is a regression test, not an unbiased measure. The first-run scores above are the unbiased ones.
 
@@ -199,7 +206,6 @@ The honest takeaway: **on survival questions worded in a way it hasn't seen, exp
 - **Unusual phrasing** can match a similar but different fact. The gate checks words, question type and coverage, but it matches words, not meaning.
 - **Facts can be outdated or simplified.** Populations, leaders and guidelines change, and a 48-character answer leaves out detail. Some answers are US-specific (gallons, 911) and say so where it matters.
 - **Survival advice is general.** Local conditions, species and injuries vary. A short answer is a reminder, not training.
-- **A lesser-known Wikidata fact may be refused even though it's stored.** The 3,500 the model gets wrong answer `I don't know.` ("population of chicago", "how long is the mississippi" among them).
 - **Speed on a physical board hasn't been measured,** only correctness in the emulator.
 
 ### Verified on ESP32 firmware
@@ -237,7 +243,8 @@ data/eval.tsv, eval_more.tsv test questions: paraphrases, everyday, survival, mu
 train/common.py             tokenizer, normalization, fact tiers (mirrored in C)
 train/model.py              the transformer, int4/int2/ternary fake-quantization for QAT
 train/train.py              training (resumable: --resume, which checks the run matches)
-train/export.py             quantization + export, errata, --max-bytes
+train/export.py             quantization + export, errata, --max-bytes; --from-bin
+                            rebuilds a model file's index and text from its own weights
 train/gate_index.py         builds the gate's word index (mirrors gate.c)
 train/check_routing.py      fast check: every phrasing reaches its fact
 train/evaluate.py           scores the real C engine
