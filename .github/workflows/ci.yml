@@ -39,6 +39,12 @@ jobs:
           "$RUNNER_TEMP/arduino-cli" core install esp32:esp32@3.3.12 --additional-urls "$ESP32_INDEX"
           "$RUNNER_TEMP/arduino-cli" compile --fqbn esp32:esp32:esp32:PartitionScheme=custom,FlashMode=dio \
             --warnings default --output-dir "$RUNNER_TEMP/arduino-build" arduino/local_esp32_ai
+          # every other ESP32 chip the docs list as supported must build too
+          for chip in esp32s2 esp32s3 esp32c3 esp32c5 esp32c6 esp32h2 esp32p4; do
+            echo "== $chip"
+            "$RUNNER_TEMP/arduino-cli" compile --fqbn "esp32:esp32:$chip:PartitionScheme=custom" \
+              --warnings default --build-path "$RUNNER_TEMP/build-$chip" arduino/local_esp32_ai | tail -n 3
+          done
       # engine build, routing, every trained phrasing, the test questions,
       # all four PlatformIO firmware targets, and both the PlatformIO and the
       # Arduino IDE firmware in the ESP32 emulator

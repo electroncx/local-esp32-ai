@@ -8,7 +8,7 @@
 2. Install the [Arduino IDE](https://www.arduino.cc/en/software). In **Tools → Board → Boards Manager**, search `esp32` and install **esp32 by Espressif Systems** (version 3.x).
 3. In the Arduino IDE, **File → Open** the sketch `arduino/local_esp32_ai/local_esp32_ai.ino` from the unzipped folder.
 4. Set the **Tools** menu:
-   - **Board:** ESP32 Dev Module (ESP32-S3 Dev Module or ESP32C3 Dev Module for those chips)
+   - **Board:** ESP32 Dev Module (or your chip's Dev Module: see [which boards work](../README.md#which-boards-work))
    - **Partition Scheme:** **Custom** (the AI needs almost all of the 4 MB flash; the sketch brings its own partition table)
    - **Flash Size:** 4MB
    - **Port:** your ESP32, after plugging it in with a USB cable

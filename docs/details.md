@@ -152,7 +152,7 @@ v2 is still one command away (`python train/train.py`, then `export.py --tier sm
 | Model in flash | 3,613 KB: 2-bit weights and int8 embeddings 1,727 KB, gate index 1,393 KB, fact keys and 4,901 stored answers 492 KB |
 | RAM at runtime | about 90 KB for one character: int8 KV cache 77 KB, activations and buffers about 13 KB; then 9.6 KB per character of the question block, sized from the free heap at boot (17 on an ESP32, leaving about 83 KB free) |
 | Engine code | pure C99, no dependencies; bit-identical floats on every chip |
-| Works on | ESP32, ESP32-S3, ESP32-C3 (4 MB flash) |
+| Works on | ESP32-family chips with 4 MB+ flash: ESP32 (emulator-tested), S2, S3, C3, C5, C6, H2, P4 (CI builds); not the ESP8266 (see the [README](../README.md#which-boards-work)) |
 
 ## Results
 

@@ -60,7 +60,7 @@ EOF
 
 if [ "$firmware" = 1 ]; then
   step "firmware builds"
-  (cd firmware && pio run -e esp32dev -e esp32dev-dio -e esp32-s3 -e esp32-c3)
+  (cd firmware && pio run -e esp32dev -e esp32dev-dio -e esp32-s2 -e esp32-s3 -e esp32-c3)
 fi
 
 emulator_check() {  # $1 = qemu, $2 = build folder

@@ -29,7 +29,7 @@ esp: I don't know.
 | Knowledge | 37,288 facts (288 survival), 146,994 accepted phrasings |
 | Model file | 3.5 MB, filling a 4 MB board's flash |
 | RAM | about 90 KB, plus the spare heap (about 165 KB) put to work for speed: questions run through the model in 17-character blocks |
-| Boards | ESP32, ESP32-S3, ESP32-C3 with 4 MB flash |
+| Boards | ESP32-family chips with 4 MB+ flash: ESP32, S2, S3, C3, C5, C6, H2, P4 (see [which boards work](#which-boards-work)) |
 | Answers | 48 characters max, or `I don't know.` |
 
 
@@ -41,6 +41,23 @@ esp: I don't know.
 
 Anything it doesn't know gets `I don't know.` instead of a guess.
 
+## Which boards work
+
+It needs **4 MB of flash or more** and **about 250 KB of RAM** (the model's working memory, plus spare RAM that makes answers faster). Every ESP32-family chip has that; the ESP8266 doesn't.
+
+| Chip | Example boards | Arduino IDE board | Status |
+|---|---|---|---|
+| ESP32 | ESP32 DevKitC, NodeMCU-32S, ESP32-WROOM-32, Wemos/Lolin D32, D1 Mini ESP32, TTGO T-Display | ESP32 Dev Module | **Supported, tested most:** runs in the ESP32 emulator with the same answers as the PC, both cores |
+| ESP32-S3 | ESP32-S3 DevKitC, Lolin S3, XIAO ESP32S3, T-Display-S3 | ESP32S3 Dev Module | **Supported:** builds; same engine, both cores |
+| ESP32-S2 | ESP32-S2 Saola, Lolin S2 Mini | ESP32S2 Dev Module | **Supported:** builds; one core, no hardware floats, so slower |
+| ESP32-C3 | ESP32-C3 DevKitM, ESP32-C3 SuperMini, XIAO ESP32C3 | ESP32C3 Dev Module | **Supported:** builds; one core, no hardware floats, so slower |
+| ESP32-C6, C5, H2, P4 | ESP32-C6 DevKitC, XIAO ESP32C6, ESP32-H2 DevKitM, ESP32-P4 boards | ESP32C6 / C5 / H2 / P4 Dev Module | **Supported:** builds (Arduino IDE only); C6, C5 and H2 are single-core without hardware floats, and the H2 runs at 96 MHz, so slowest |
+| ESP8266 | NodeMCU v2/v3, **ESP-12E**, ESP-12F, ESP-01, Wemos D1 Mini | — | **Not supported:** about 40–50 KB of free RAM (the model needs about 90 KB just to run), and it can only read about 1 MB of flash directly (the model is 3.6 MB) |
+| Any chip with 2 MB flash or less | some cheap ESP32-C3 and ESP32-S2 boards | — | **Not supported:** the model alone is 3.6 MB. Check the flash size printed on your board's module |
+| Not ESP32 at all | Arduino Uno / Nano / Mega, Raspberry Pi Pico (RP2040), STM32 Blue Pill | — | **Not supported:** too little flash or RAM, or a different chip family the engine isn't built for |
+
+"Builds" means GitHub CI compiles this sketch for that chip on every change. Only the classic ESP32 also runs the whole firmware in an emulator, because that's the only chip Espressif's emulator runs reliably. None of these has been timed on a physical board yet.
+
 ## Usage
 
 **First time (once, with a computer):**
@@ -49,7 +66,7 @@ Anything it doesn't know gets `I don't know.` instead of a guess.
 2. Install the [Arduino IDE](https://www.arduino.cc/en/software). In **Tools → Board → Boards Manager**, search `esp32` and install **esp32 by Espressif Systems** (version 3.x).
 3. In the Arduino IDE, **File → Open** the sketch `arduino/local_esp32_ai/local_esp32_ai.ino` from the unzipped folder.
 4. Set the **Tools** menu:
-   - **Board:** ESP32 Dev Module (ESP32-S3 Dev Module or ESP32C3 Dev Module for those chips)
+   - **Board:** ESP32 Dev Module (or your chip's Dev Module: see [which boards work](#which-boards-work))
    - **Partition Scheme:** **Custom** (the AI needs almost all of the 4 MB flash; the sketch brings its own partition table)
    - **Flash Size:** 4MB
    - **Port:** your ESP32, after plugging it in with a USB cable
